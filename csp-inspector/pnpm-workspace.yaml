@@ -1,0 +1,12 @@
+packages:
+  - 'packages/*'
+
+allowBuilds:
+  esbuild: true
+  sharp: true
+
+# Native postinstall builds we permit (esbuild powers the vite build; sharp is pulled in
+# transitively by the Caido dev toolchain). Approved here so `pnpm install` is non-interactive.
+onlyBuiltDependencies:
+  - esbuild
+  - sharp

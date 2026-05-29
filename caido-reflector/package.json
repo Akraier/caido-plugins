@@ -1,0 +1,20 @@
+{
+  "name": "caido-reflector",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/clean.js && npm run build --workspaces && node scripts/pack.js",
+    "test": "tsx --test test/*.test.ts",
+    "test:integration": "tsx test/integration.ts"
+  },
+  "devDependencies": {
+    "@caido/plugin-manifest": "0.3.0",
+    "jszip": "3.10.1",
+    "tsx": "4.19.2",
+    "typescript": "5.4.3",
+    "vite": "5.2.7"
+  },
+  "workspaces": [
+    "packages/*"
+  ]
+}

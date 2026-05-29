@@ -1,0 +1,17 @@
+{
+  "name": "backend",
+  "version": "0.1.0",
+  "type": "module",
+  "types": "src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "tldts": "^7.4.0"
+  },
+  "devDependencies": {
+    "@caido/sdk-backend": "^0.56.2",
+    "vite": "6.0.11"
+  }
+}

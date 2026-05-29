@@ -1,0 +1,20 @@
+{
+  "name": "bypass-403",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "caido-dev build",
+    "watch": "caido-dev watch",
+    "typecheck": "tsc --noEmit && pnpm -r --if-present typecheck",
+    "lint": "eslint . --ext .ts,.vue"
+  },
+  "devDependencies": {
+    "@caido-community/dev": "^0.4.0",
+    "@caido/sdk-frontend": "^0.49.0",
+    "@caido/sdk-backend": "^0.4.0",
+    "typescript": "^5.5.0",
+    "vue": "^3.4.0"
+  },
+  "packageManager": "pnpm@9.0.0"
+}

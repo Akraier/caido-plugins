@@ -1,0 +1,11 @@
+{
+  "name": "caido-reflector-backend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build"
+  },
+  "devDependencies": {
+    "@caido/sdk-backend": "0.56.2"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "name": "@bypass-403/frontend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "vue": "^3.4.0",
+    "primevue": "^4.0.0",
+    "primeicons": "^7.0.0"
+  },
+  "devDependencies": {
+    "@caido/sdk-frontend": "^0.49.0",
+    "@bypass-403/backend": "workspace:*",
+    "typescript": "^5.5.0",
+    "vue-tsc": "^2.0.0"
+  }
+}
