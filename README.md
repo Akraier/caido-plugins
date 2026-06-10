@@ -9,6 +9,7 @@ Caido plugins for security testing and recon.
 | [csp-inspector](./csp-inspector) | Passively inspects every response's Content-Security-Policy and reports subdomains, same-brand hosts, internal IPs and possible origin IPs as Findings. |
 | [caido-bypass-403](./caido-bypass-403) | Automatic 403/401 bypass via header injection (IP spoofing), path mutations, and host overrides. Manual right-click or opt-in auto-mode. |
 | [caido-reflector](./caido-reflector) | Passive parameter-reflection detection with HTML / JS / attribute / URL context classification. |
+| [cache-profiler](./cache-profiler) | Passively flags cached responses, then on demand classifies the cache rule, maps the cache key vs Vary, derives origin-vs-edge intent, and probes delimiter-based path confusion (web cache deception surface). |
 
 ## Building
 
