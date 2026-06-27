@@ -1,7 +1,8 @@
+import { mountSettingsPage } from "./settings";
 import type { FrontendSDK } from "./types";
 
 // Keep in sync with PLUGIN_VERSION in the backend / caido.config.ts.
-const PLUGIN_VERSION = "0.2.0";
+const PLUGIN_VERSION = "0.4.1";
 
 const Commands = {
   run: "cache-profiler.run",
@@ -85,6 +86,9 @@ export const init = (sdk: FrontendSDK): void => {
   sdk.window.showToast(`Cache Profiler v${PLUGIN_VERSION} loaded`, {
     variant: "info",
   });
+
+  // Settings page (sidebar) — live-editable scope / confirm / rate / max / dedupe + status.
+  mountSettingsPage(sdk);
 
   sdk.commands.register(Commands.run, {
     name: "Profile cache behaviour",

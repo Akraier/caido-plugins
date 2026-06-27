@@ -56,11 +56,17 @@ export const EMPTY_PROBE: Probe = {
 const TIMING_HIT_RATIO = 0.5; // 2nd request <= half the 1st request's roundtrip
 const TIMING_MIN_GAP_MS = 15; // ...and at least this much faster, to clear jitter
 
+// Header stamped on every request the plugin itself sends, so the passive interceptor can
+// recognise and skip its own probe traffic (otherwise the confirmation probes would re-trigger
+// the queue recursively).
+export const PROBE_MARKER = "X-Cp-Probe";
+
 export type ProbeOpts = {
   path?: string;
   appendQuery?: string;
   setCookie?: string;
   stripCookie?: boolean;
+  marker?: boolean; // stamp PROBE_MARKER so the interceptor ignores this request
 };
 
 export function specFor(base: CaidoRequest, opts: ProbeOpts): RequestSpec {
@@ -76,6 +82,7 @@ export function specFor(base: CaidoRequest, opts: ProbeOpts): RequestSpec {
   }
   if (opts.stripCookie === true) spec.removeHeader("Cookie");
   if (opts.setCookie !== undefined) spec.setHeader("Cookie", opts.setCookie);
+  if (opts.marker === true) spec.setHeader(PROBE_MARKER, "1");
   return spec;
 }
 

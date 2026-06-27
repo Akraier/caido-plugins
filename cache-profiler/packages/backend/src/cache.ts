@@ -118,7 +118,11 @@ function keywordToStatus(kw: string): CacheStatus {
 }
 
 // Map a response's headers to a single vendor-independent verdict.
-export function cacheStatus(h: HeaderMap): CacheStatus {
+// Header-derived cache state, WITHOUT the weak Age fallback. This is the canonical state used
+// by the confirmation state machine: it only returns a verdict when a status-bearing header
+// (enum / numeric counter / Varnish dual-ID / keyword) actually carries one. Age alone is not
+// a state here — an incrementing Age is corroborating evidence, not proof of edge storage.
+export function cacheState(h: HeaderMap): CacheStatus {
   // Cloudflare uses a precise enum.
   const cf = first(h["cf-cache-status"]);
   if (cf !== undefined) {
@@ -148,12 +152,25 @@ export function cacheStatus(h: HeaderMap): CacheStatus {
     if (kw !== undefined) return keywordToStatus(kw);
   }
 
-  // Fallback: an Age header on its own indicates a shared cache in path.
-  const age = first(h["age"]);
-  if (age !== undefined) {
-    return Number(age) > 0 ? "HIT" : "MISS";
-  }
+  return "NONE";
+}
 
+// Numeric x-cache-hits counter (-1 when absent / non-numeric). Used for the counter-delta
+// transition check in the confirmation state machine.
+export function hitsOf(h: HeaderMap): number {
+  const hits = first(h["x-cache-hits"]);
+  if (hits === undefined) return -1;
+  const n = Number((hits.trim().split(/[\s,]/)[0] ?? ""));
+  return Number.isNaN(n) ? -1 : n;
+}
+
+// Full verdict including the Age fallback. Kept for the exploitation commands' Probe snapshot,
+// where "a shared cache is in path" is good enough. The state machine uses cacheState instead.
+export function cacheStatus(h: HeaderMap): CacheStatus {
+  const s = cacheState(h);
+  if (s !== "NONE") return s;
+  const age = first(h["age"]);
+  if (age !== undefined) return Number(age) > 0 ? "HIT" : "MISS";
   return "NONE";
 }
 
@@ -189,6 +206,28 @@ export function cacheSignals(h: HeaderMap): string[] {
 export function isCacheCandidate(h: HeaderMap): boolean {
   if (cacheStatus(h) !== "NONE") return true;
   return cacheSignals(h).length > 0;
+}
+
+// What kind of passive signal a response carries — drives whether it is worth an active probe.
+//   "state"   — a status-bearing header reports a real HIT/MISS state worth confirming.
+//   "keyword" — an unrecognised header carries a non-dead cache-state keyword (HIT/MISS/...).
+//   "none"    — nothing probe-worthy: only infra presence (cf-ray/via/age/cache-control), or a
+//               dead-negative state (DYNAMIC/BYPASS) that cannot transition on an identical resend.
+// This is deliberately stricter than isCacheCandidate: mere "a CDN is in path" or "cacheable in
+// principle" must NOT trigger, which is what was flooding the passive findings panel.
+export type TriggerKind = "state" | "keyword" | "none";
+
+export function passiveTrigger(h: HeaderMap): TriggerKind {
+  const s = cacheState(h);
+  // HIT/MISS (incl. EXPIRED/STALE/REVALIDATED -> MISS) can transition on resend; DYNAMIC/BYPASS
+  // cannot, so they are not a trigger.
+  if (s === "HIT" || s === "MISS") return "state";
+
+  const kw = unknownCacheKeywordHits(h);
+  if (kw.some((k) => k.keyword !== "DYNAMIC" && k.keyword !== "BYPASS")) {
+    return "keyword";
+  }
+  return "none";
 }
 
 // Header names we already understand — excluded from the unknown-header keyword sweep.
