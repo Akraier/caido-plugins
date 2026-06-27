@@ -10,11 +10,18 @@ cache and confirms the primitives so a human finishes the call. Full design in
 
 It works in two layers:
 
-- **Passive** — read-only, sends nothing. Flags every response that looks cached.
-- **Active** — four operator-invoked right-click commands that probe a selected request.
+- **Passive** — a cache header is a *trigger*, not a verdict. Only a real cache-**state** signal
+  (HIT/MISS or a live keyword) qualifies; infra presence (`cf-ray`, `via`, `age`,
+  `cache-control`) and dead-negatives (`DYNAMIC`/`BYPASS`) are ignored. A qualifying trigger
+  feeds an automatic confirmation machine that **probes** the resource, and a finding is raised
+  only when probing proves it is genuinely served from cache. With confirmation disabled the
+  layer stays fully read-only and emits one candidate lead per host.
+- **Active** — four operator-invoked right-click commands that probe a selected request, plus
+  the confirmation machine behind the passive layer.
 
 All findings render as Markdown in Caido's Findings panel (bold section titles, one atomic
-item per bullet).
+item per bullet). Configuration is live-editable from the **Cache Profiler** sidebar page — no
+reload needed.
 
 ---
 
@@ -35,10 +42,12 @@ All four are under right-click → **Plugins → Cache Profiler**, and in the co
 
 A typical workflow:
 
-1. **Browse the target through Caido.** Watch the Findings panel — cached responses appear as
-   `CACHE DETECTED — <host>` (and `CACHE POTENTIALLY DETECTED` when a cache keyword shows up in
-   a header the plugin doesn't recognise). A cached **non-200** is tagged in the title
-   (`[301]`, `[403]`) — those are leads in themselves (cached redirect / sensitive error).
+1. **Browse the target through Caido.** With confirmation enabled (a scope set, or
+   `CACHE_PROFILER_CONFIRM=on`), cached responses are confirmed by an automatic probe and appear
+   as `CACHE CONFIRMED — <host>` with a confidence (`HIGH`/`MEDIUM`/`LOW`). Without confirmation
+   you get one read-only `CACHE CANDIDATE — <host>` lead per host instead. A cached **non-200**
+   is tagged in the title (`[301]`, `[403]`) — those are leads in themselves (cached redirect /
+   sensitive error).
 
 2. **Characterise a cached host.** Right-click a cached request → **Profile cache behaviour**.
    Read the `Cache Profile — <host>` finding: the rule (`static extension` / `static directory`
@@ -59,56 +68,97 @@ A typical workflow:
    sensitive endpoint you care about (the plugin proves the *primitive* on throwaway URLs — the
    sensitive target is yours to choose).
 
-> Tip: scope the passive layer to your target with `CACHE_PROFILER_SCOPE` so the panel isn't
-> noisy. The active commands are always gated on Caido scope.
+> Tip: set `CACHE_PROFILER_SCOPE` (in the sidebar **Cache Profiler** page or as an env var) to
+> your target. Doing so both scopes the passive layer to those hosts **and** enables active
+> confirmation. The four right-click commands are always gated on Caido scope.
 
 ---
 
 ## Passive detection
 
-On every proxied response the plugin checks for a cache signal and, if found, emits one
-Finding. Read-only — it never sends a request.
+A header signal is a **trigger**, not a verdict. This is the core change that keeps the panel
+clean on mass-probe / heavy-traffic targets: a header that merely says "a CDN is in the path"
+or "this is cacheable" no longer produces a finding.
 
-**Recognised cache headers**
+**What triggers** (state-bearing only):
 
-- **Status-bearing** (drive the HIT/MISS verdict): `cf-cache-status`, `x-cache`,
+- A real **HIT/MISS** state from a status-bearing header — `cf-cache-status`, `x-cache`,
   `x-cache-hits` (numeric), `x-varnish` (two IDs = HIT), `cache-status` (RFC 9211),
   `akamai-cache-status`, `x-cache-status`, `x-cache-lookup`, `x-proxy-cache`, `x-drupal-cache`,
   `x-litespeed-cache`, `x-rack-cache`, `x-spip-cache`, `x-nginx-cache`, `x-fastcgi-cache`,
   `x-srcache-fetch-status`/`-store-status`, `x-vercel-cache`, `x-nextjs-cache`, `x-now-cache`,
   `x-cdn-cache`/`-status`, `x-edge-cache`/`-status`, `x-cacheable`, `x-magento-cache-debug`,
   `x-nc`, `x-tt-cache`, `x-bdcdn-cache-status`, `x-ws-cache-status`.
-- **Presence markers** (a cache/CDN layer is in path): `age`, `x-served-by`, `x-timer`,
-  `x-cache-key`, `surrogate-key`, `cdn-cache-control`, `surrogate-control`, `x-iinfo`, `x-cdn`,
-  `fastly-debug-digest`, `cf-ray`, `x-amz-cf-pop`/`-id`, `x-azure-ref`, `x-msedge-ref`,
-  Akamai markers, `x-fastly-request-id`, `via`, …
-- **Directives**: `cache-control` (public/private/no-store/max-age) and `vary`.
+- A whole-token cache **keyword** (`HIT` / `MISS` / `EXPIRED` / `STALE` / `REVALIDATED` /
+  `UPDATING`) in an **unrecognised** header. Whole-token matching means `TCP_HIT` and
+  `Hit from cloudfront` match but `whitelist` does not.
 
-**Keyword safety net** — beyond the known list, every header value is scanned for a
-whole-token cache state (`HIT` / `MISS` / `EXPIRED` / `STALE` / `DYNAMIC` / `BYPASS` /
-`REVALIDATED` / `UPDATING`). Whole-token matching means `TCP_HIT` and `Hit from cloudfront`
-match but `whitelist` does not. If a keyword appears in an **unrecognised** header:
+**What does NOT trigger** (was the old false-positive flood):
+
+- **Presence markers** — `cf-ray`, `via`, `age`, `x-served-by`, `x-amz-cf-pop`/`-id`,
+  `x-azure-ref`, … These prove a CDN is in path, not that anything is cached. They are still
+  collected as *context* and attached to a confirmed finding.
+- **Directives** — `cache-control` (public/max-age) and `vary` describe cacheability/keying,
+  not state.
+- **Dead-negatives** — `DYNAMIC` / `BYPASS`. An identical resend cannot transition them, so
+  there is nothing to confirm.
+
+### Confirmation state machine
+
+A trigger doesn't raise a finding — it enqueues an active probe that confirms whether the edge
+*actually stores and serves* this resource. The machine is `v0 → resend → control`, sending **at
+most two requests** and short-circuiting the moment the verdict is decided:
+
+1. **v0** — the intercepted response (free). `DYNAMIC`/`BYPASS` ⇒ dropped. Already-warm
+   (`HIT`/`Age`/hit-counter) ⇒ skip the resend.
+2. **resend** — an identical request; looks for the transition `MISS → HIT` / `Age++` /
+   `x-cache-hits++`. No transition ⇒ **not cached**, silent.
+3. **control** — one request with a unique query cache-buster. A clean **MISS** ⇒ the cache
+   keys on the query and stored the real URL (`HIGH`). A **HIT** ⇒ query unkeyed or catch-all,
+   still detected but degraded (`MEDIUM`/`LOW`).
+
+Only a confirmed result is emitted:
 
 ```markdown
-**CACHE POTENTIALLY DETECTED**
+**CACHE CONFIRMED — HIGH confidence**
 
+- verdict: edge served this resource from cache (confirmed by active probe)
 - status: `200`
-- `HIT` in `x-acme-edge`  (`x-acme-edge: HIT lhr-3`)
+- cache keys on query: yes — unique buster MISSed (clean key)
+- `cf-cache-status: HIT`
 ```
 
-When known headers fire, any unknown-header keyword hit is appended as an `also:` note so you
-still learn new headers.
+`not-cached` and `dead` outcomes raise **nothing** — that is the flood fix.
 
-**Status code** is captured and, for a cached non-200, annotated (cached redirect /
+### Bounded, controllable probe traffic
+
+Confirmation sends traffic, so it is governed:
+
+- **Opt-in** — runs when a scope is set, or `CACHE_PROFILER_CONFIRM=on`. No scope and no
+  override ⇒ confirmation is off and the layer is read-only (candidate mode below).
+- **Deduped by cache-key** — one probe per resource per session.
+- **Rate-limited** — `CACHE_PROFILER_RATE` resources/min (default 30; each ≤ 2 requests).
+- **Capped** — `CACHE_PROFILER_MAX` total per session (default 200).
+- **Self-skipping** — probes carry an `X-Cp-Probe` header the interceptor ignores (no loop).
+- **Self-halting** — three consecutive `429`/`503` halt the queue; clear it with **Resume** on
+  the settings page.
+
+### Candidate mode (confirmation disabled)
+
+With no scope and no `CONFIRM=on`, the layer never probes. It emits **one** read-only
+`CACHE CANDIDATE — <host>` lead per host, listing the trigger and context headers — enough to
+know a cache exists without flooding or sending anything.
+
+**Status code** is captured and, for a confirmed non-200, annotated (cached redirect /
 sensitive error / negative caching / server error) and added to the finding title.
 
-**Dedupe granularity** (`CACHE_PROFILER_DEDUPE`):
+**Dedupe granularity** (`CACHE_PROFILER_DEDUPE`) — applies to the confirmed-finding key:
 
 - `smart` (default) — static assets (css/js/images/fonts, by content-type or extension)
-  collapse to one finding per `host:status`; dynamic responses (html/json/xml/no-extension)
-  are kept **per path** so a cached `/account` isn't masked by a cached `.css`.
-- `host` — one finding per `host:status` (aggressive; for massively-cached targets).
-- `path` — one finding per `host:status:path` (granular; for sparse caches, miss nothing).
+  collapse to one finding per host; dynamic responses (html/json/xml/no-extension) are kept
+  **per path** so a cached `/account` isn't masked by a cached `.css`.
+- `host` — one finding per host (aggressive; for massively-cached targets).
+- `path` — one finding per host:path (granular; for sparse caches, miss nothing).
 
 ---
 
@@ -265,14 +315,33 @@ ones no real user visits — cache population is non-destructive.
 
 ## Settings
 
+### Settings page (sidebar)
+
+The **Cache Profiler** entry in the left sidebar opens a live settings page:
+
+- **Live status** — `mode` (active-confirm / candidate-only), `scope`, `probed / max`,
+  `queued`, `halted`. Auto-refreshes while open — the quickest way to see whether confirmation
+  is running or parked.
+- **Five knobs** — Confirm mode, Scope, Rate, Session max, Dedupe — saved to plugin storage and
+  applied to the backend **live, with no reload**.
+- **Resume** — appears only when the throttle watchdog has halted probing; clears the halt.
+
+Configuration resolves as **env vars (seed at load) → stored settings (override) → live edits**.
+The env vars below still work for headless / first-run use; the page takes precedence once used.
+
+### Environment variables
+
 | Environment variable | Effect |
 | --- | --- |
-| `CACHE_PROFILER_SCOPE` | Comma-separated registrable domains (e.g. `target.com,target.dev`). When set, **passive** detection only processes matching hosts. Unset → all responses. |
+| `CACHE_PROFILER_SCOPE` | Comma-separated registrable domains (e.g. `target.com,target.dev`). Scopes **passive** processing to matching hosts **and** enables active confirmation. Unset → all hosts, confirmation off (unless `CONFIRM=on`). |
+| `CACHE_PROFILER_CONFIRM` | `on` / `off` — force the confirmation machine regardless of scope. Default (unset) = auto: on when a scope is set. |
+| `CACHE_PROFILER_RATE` | Resources probed per minute during confirmation (each ≤ 2 requests). Default `30`. |
+| `CACHE_PROFILER_MAX` | Hard ceiling on resources probed per backend session. Default `200`. |
 | `CACHE_PROFILER_NORM_PATH` | Comparer path for **Path normalization** origin testing. Default `/`. Set to a stable, non-cached dynamic endpoint (e.g. `/profile`) when `/` is a poor comparer. |
-| `CACHE_PROFILER_DEDUPE` | Passive finding granularity: `smart` (default), `host` (aggressive), `path` (granular). See *Passive detection*. |
+| `CACHE_PROFILER_DEDUPE` | Confirmed-finding granularity: `smart` (default), `host` (aggressive), `path` (granular). See *Passive detection*. |
 
-The active commands are always gated on **Caido scope** (`Request out of scope` if the host
-isn't in scope) regardless of these variables.
+The four right-click commands are always gated on **Caido scope** (`Request out of scope` if the
+host isn't in scope) regardless of these variables.
 
 ---
 
@@ -281,6 +350,10 @@ isn't in scope) regardless of these variables.
 - Probes use **random unique** path segments → non-destructive cache population, no poisoning
   of live assets. The one exception (file-name normalization on a normalized-keying cache) is
   detected and **refused** rather than executed.
+- **Passive confirmation traffic is bounded**: opt-in (scope / `CONFIRM=on`), deduped to one
+  probe per resource per session, rate-limited (`CACHE_PROFILER_RATE`, default 30/min), capped
+  (`CACHE_PROFILER_MAX`, default 200), and auto-halted after three consecutive `429`/`503`
+  (clear with **Resume**). Worst case is two requests per resource.
 - Active commands run **sequentially**. Raise `REQUEST_DELAY_MS` in
   `packages/backend/src/probe.ts` to throttle rate-limited / bot-protected targets, and stop if
   you see uniform `429` / challenge responses.
@@ -317,19 +390,24 @@ Bump `PLUGIN_VERSION` in `caido.config.ts`, `packages/backend/src/index.ts` and
 
 ```
 packages/backend/src/
-  cache.ts       pure logic: header/status normalisation, keyword net, Cache-Control & Vary
-                 parsing, content-type classifier, report formatting (no SDK — unit-testable)
-  probe.ts       shared probing primitives: send + roundtrip, confirmCached (+ timing
-                 fallback), sharesEntry, two-anchor classifier
+  cache.ts       pure logic: cacheState/cacheStatus, hitsOf, passiveTrigger (state-bearing
+                 only), keyword net, Cache-Control & Vary parsing, content-type classifier
+  probe.ts       shared probing primitives: send + roundtrip, confirmCached, sharesEntry,
+                 two-anchor classifier, PROBE_MARKER (self-traffic header)
+  confirm.ts     passive confirmation state machine (v0 -> resend -> control) + bounded
+                 ConfirmQueue (dedupe, rate limit, session cap, 429/503 halt, resume, stats)
+  config.ts      live mutable RuntimeConfig: env seed, merge, effectiveConfirm, scope/dedupe
   profiler.ts    Profile cache behaviour — rule / key / intent state machine + deception gate
   delimiter.ts   Delimiter detection — anchors, delimiter map, suffix-confusion matrix, leak
   normalize.ts   Path normalization — origin/cache traversal directions, file-name poison guard
   timing.ts      Timing cache probe — MISS baseline vs steady-state RTT
   store.ts       in-memory host->profile bridge (shares cached extensions between commands)
-  index.ts       passive detection + command registration + Finding emission
+  index.ts       passive trigger -> confirm/candidate, command registration, settings API,
+                 Finding emission
   types.ts       shared types
 packages/frontend/src/
-  index.ts       right-click menu items, command palette entries, result toasts
+  index.ts       right-click menu items, command palette entries, result toasts, settings page
+  settings.ts    sidebar Cache Profiler page — live status + config form (storage + backend)
 ```
 
 ---
