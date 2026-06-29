@@ -16,7 +16,7 @@ It works in two layers:
   feeds an automatic confirmation machine that **probes** the resource, and a finding is raised
   only when probing proves it is genuinely served from cache. With confirmation disabled the
   layer stays fully read-only and emits one candidate lead per host.
-- **Active** — four operator-invoked right-click commands that probe a selected request, plus
+- **Active** — five operator-invoked right-click commands that probe a selected request, plus
   the confirmation machine behind the passive layer.
 
 All findings render as Markdown in Caido's Findings panel (bold section titles, one atomic
@@ -33,8 +33,9 @@ reload needed.
 | **Delimiter detection** | a routable dynamic endpoint (`/profile`, not `/app.js`) | Finds delimiters the origin truncates at but the cache keeps, plus direct-extension / filename / cased-encoded suffix confusion, and a cross-session leak check |
 | **Path normalization** | the cached static-directory or file-name resource | Tests the `..%2f` traversal discrepancy (origin-normalizes and cache-normalizes directions) |
 | **Timing cache probe** | any request | Confirms caching by latency (MISS baseline vs steady RTT) when the CDN strips cache headers |
+| **Cache poisoning: unkeyed headers** | any cacheable request | Batched Param-Miner-style scan: injects ~1,200 candidate request headers to find ones that reflect but are **not** in the cache key (web cache poisoning) |
 
-All four are under right-click → **Plugins → Cache Profiler**, and in the command palette.
+All five are under right-click → **Plugins → Cache Profiler**, and in the command palette.
 
 ---
 
@@ -70,7 +71,7 @@ A typical workflow:
 
 > Tip: set `CACHE_PROFILER_SCOPE` (in the sidebar **Cache Profiler** page or as an env var) to
 > your target. Doing so both scopes the passive layer to those hosts **and** enables active
-> confirmation. The four right-click commands are always gated on Caido scope.
+> confirmation. The five right-click commands are always gated on Caido scope.
 
 ---
 
@@ -299,6 +300,56 @@ the delimiter / normalization findings.
 
 ---
 
+## Command: Cache poisoning — unkeyed headers
+
+On-demand web cache poisoning (Param Miner style): finds request headers that **change the
+response but are not in the cache key**, so a value injected once is stored and served to other
+users. Run it on a cacheable request. Operator-invoked only — never automatic, never passive.
+
+**Safety — every probe uses a unique `cpb=<rand>` query cache-buster**, so the only cache
+entries ever populated are keyed to throwaway URLs no real user visits.
+
+1. **Preflight** — confirms the resource is cacheable under a buster, then sends a *second*
+   fresh buster and checks it isn't already served from cache. If the cache **ignores the query
+   string** (so a buster cannot isolate a probe), the scan **ABORTS** rather than risk poisoning
+   the live entry served to other users.
+2. **Batched detection** — injects the header list **50 per request**, each header carrying its
+   own canary, so one response names every reflecting header directly. A batch that reflects
+   nothing is eliminated in a single request; an oversize-header rejection (`431`/`400`) splits
+   the batch in half and retries (binary fallback). The full ~1,200-header list scans in **~25
+   batched requests**, not ~1,200.
+3. **Confirmation** — each reflecting header is re-tested **in isolation** (filters batch-context
+   false positives), then a clean resend **without** the header under the same buster checks
+   whether the canary persists from cache ⇒ **unkeyed + cached** = poisoning.
+
+```markdown
+**UNKEYED HEADERS — CACHE POISONING**
+
+- target: `/`
+- cacheable under buster: yes
+- query buster safe (distinct key): yes
+- headers tested: 1209
+
+**UNKEYED + CACHED** (poisoning — reproduce and assess impact)
+- `X-Forwarded-Host` -> reflected in header:location  (reflected in Location — open-redirect / redirect poisoning)
+
+**REFLECTED ONLY** (keyed or not cached — leads, not confirmed poisoning)
+- `X-Forwarded-Scheme` -> reflected in body
+```
+
+Reflection is searched in the **body and every response header**, and high-value sinks are
+annotated (`Location` → redirect poisoning, `Access-Control-Allow-Origin` → CORS, `Set-Cookie`
+→ cookie injection, body → XSS / absolute-URL lead). Results split into **UNKEYED + CACHED**
+(confirmed poisoning) vs **REFLECTED ONLY** (keyed or uncached — leads). The sweep **halts after
+5 consecutive `429`/`503`** (rate-limit/bot) and reports how far it got.
+
+The header wordlist is `POISON_HEADERS` in `poison_headers.ts` — the full PortSwigger Param
+Miner `resources/headers` set (deduped, request-framing headers removed), with ~33 high-value
+host/URL/proto/client-IP/override vectors ordered first so an early halt still covers the best
+ones.
+
+---
+
 ## How it works (the one primitive)
 
 Everything rests on: **double-request, then mutate one dimension and re-request.** Sending a
@@ -340,16 +391,18 @@ The env vars below still work for headless / first-run use; the page takes prece
 | `CACHE_PROFILER_NORM_PATH` | Comparer path for **Path normalization** origin testing. Default `/`. Set to a stable, non-cached dynamic endpoint (e.g. `/profile`) when `/` is a poor comparer. |
 | `CACHE_PROFILER_DEDUPE` | Confirmed-finding granularity: `smart` (default), `host` (aggressive), `path` (granular). See *Passive detection*. |
 
-The four right-click commands are always gated on **Caido scope** (`Request out of scope` if the
+The five right-click commands are always gated on **Caido scope** (`Request out of scope` if the
 host isn't in scope) regardless of these variables.
 
 ---
 
 ## Safety and rate
 
-- Probes use **random unique** path segments → non-destructive cache population, no poisoning
-  of live assets. The one exception (file-name normalization on a normalized-keying cache) is
-  detected and **refused** rather than executed.
+- Probes use **random unique** path segments (or, for the poisoning scan, a unique `cpb=` query
+  buster) → non-destructive cache population, no poisoning of live assets. Two cases that would
+  be unsafe are **detected and refused** rather than executed: file-name normalization on a
+  normalized-keying cache, and the unkeyed-header scan when the cache ignores the query string
+  (so a buster cannot isolate the probe).
 - **Passive confirmation traffic is bounded**: opt-in (scope / `CONFIRM=on`), deduped to one
   probe per resource per session, rate-limited (`CACHE_PROFILER_RATE`, default 30/min), capped
   (`CACHE_PROFILER_MAX`, default 200), and auto-halted after three consecutive `429`/`503`
@@ -357,7 +410,8 @@ host isn't in scope) regardless of these variables.
 - Active commands run **sequentially**. Raise `REQUEST_DELAY_MS` in
   `packages/backend/src/probe.ts` to throttle rate-limited / bot-protected targets, and stop if
   you see uniform `429` / challenge responses.
-- A full Profile / Delimiter run is ~50–80 requests; Timing cache probe ~10. Active probing is
+- A full Profile / Delimiter run is ~50–80 requests; Timing cache probe ~10; the unkeyed-header
+  poisoning scan ~25–35 (batched) plus 2 per reflecting header. Active probing is
   exploitation-adjacent — only run it on assets you are authorised to test.
 
 ---
@@ -401,6 +455,9 @@ packages/backend/src/
   delimiter.ts   Delimiter detection — anchors, delimiter map, suffix-confusion matrix, leak
   normalize.ts   Path normalization — origin/cache traversal directions, file-name poison guard
   timing.ts      Timing cache probe — MISS baseline vs steady-state RTT
+  poison.ts      Unkeyed-header scan — buster-safety preflight, batched distinct-canary
+                 detection (split-on-oversize), isolate + unkeyed+cached confirmation
+  poison_headers.ts  generated Param Miner header wordlist (high-value vectors first)
   store.ts       in-memory host->profile bridge (shares cached extensions between commands)
   index.ts       passive trigger -> confirm/candidate, command registration, settings API,
                  Finding emission

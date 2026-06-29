@@ -144,6 +144,27 @@ export type TimingResult = {
   notes: string[];
 };
 
+// Unkeyed-header (cache-poisoning) scan — on-demand only, every probe under a unique buster.
+export type UnkeyedHit = {
+  header: string; // the injected request header
+  canary: string; // the unique value injected
+  reflectedIn: string[]; // where the canary came back: "body", "header:location", …
+  cached: boolean; // confirmed unkeyed + cached (canary returned on a clean resend)
+  impact?: string; // human note when the reflection sink is high-value (Location / CORS / …)
+};
+
+export type PoisonResult = {
+  host: string;
+  basePath: string;
+  aborted: boolean;
+  abortReason?: string;
+  cacheable: boolean; // resource is cacheable under a query buster
+  querySafe: boolean; // the query buster creates a distinct cache key (safe to probe)
+  tested: number; // headers injected
+  hits: UnkeyedHit[];
+  notes: string[];
+};
+
 export type ProfileStart = { url: string };
 export type ProfileDone = { url: string; summary: string };
 export type ProfileError = { message: string };

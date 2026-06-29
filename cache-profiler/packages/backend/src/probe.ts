@@ -67,6 +67,7 @@ export type ProbeOpts = {
   setCookie?: string;
   stripCookie?: boolean;
   marker?: boolean; // stamp PROBE_MARKER so the interceptor ignores this request
+  headers?: Record<string, string>; // arbitrary request headers (e.g. unkeyed-header probes)
 };
 
 export function specFor(base: CaidoRequest, opts: ProbeOpts): RequestSpec {
@@ -82,15 +83,16 @@ export function specFor(base: CaidoRequest, opts: ProbeOpts): RequestSpec {
   }
   if (opts.stripCookie === true) spec.removeHeader("Cookie");
   if (opts.setCookie !== undefined) spec.setHeader("Cookie", opts.setCookie);
+  if (opts.headers !== undefined) {
+    for (const [name, value] of Object.entries(opts.headers)) {
+      spec.setHeader(name, value);
+    }
+  }
   if (opts.marker === true) spec.setHeader(PROBE_MARKER, "1");
   return spec;
 }
 
-export async function send(sdk: EngineSDK, spec: RequestSpec): Promise<Probe> {
-  await sleep(REQUEST_DELAY_MS);
-  const sent = await sdk.requests.send(spec);
-  const res: CaidoResponse | undefined = sent.response;
-  if (res === undefined) return EMPTY_PROBE;
+function parseProbe(res: CaidoResponse): Probe {
   const h = lower(res.getHeaders());
   const body = res.getBody();
   return {
@@ -103,6 +105,29 @@ export async function send(sdk: EngineSDK, spec: RequestSpec): Promise<Probe> {
     headers: h,
     ok: true,
   };
+}
+
+export async function send(sdk: EngineSDK, spec: RequestSpec): Promise<Probe> {
+  await sleep(REQUEST_DELAY_MS);
+  const sent = await sdk.requests.send(spec);
+  const res: CaidoResponse | undefined = sent.response;
+  return res === undefined ? EMPTY_PROBE : parseProbe(res);
+}
+
+// Like send, but also decodes the response body to text — for reflection detection in the
+// unkeyed-header (cache-poisoning) scan. Kept separate so the hot confirm path never pays the
+// body-decode cost.
+export async function sendWithBody(
+  sdk: EngineSDK,
+  spec: RequestSpec,
+): Promise<{ probe: Probe; body: string }> {
+  await sleep(REQUEST_DELAY_MS);
+  const sent = await sdk.requests.send(spec);
+  const res: CaidoResponse | undefined = sent.response;
+  if (res === undefined) return { probe: EMPTY_PROBE, body: "" };
+  const probe = parseProbe(res);
+  const b = res.getBody();
+  return { probe, body: b !== undefined ? b.toText() : "" };
 }
 
 // Send a URL twice; decide whether the edge actually stored it. Header-based first; only when

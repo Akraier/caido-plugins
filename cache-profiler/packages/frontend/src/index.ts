@@ -2,13 +2,14 @@ import { mountSettingsPage } from "./settings";
 import type { FrontendSDK } from "./types";
 
 // Keep in sync with PLUGIN_VERSION in the backend / caido.config.ts.
-const PLUGIN_VERSION = "0.4.1";
+const PLUGIN_VERSION = "0.5.0";
 
 const Commands = {
   run: "cache-profiler.run",
   delimiter: "cache-profiler.delimiter",
   normalization: "cache-profiler.normalization",
   timing: "cache-profiler.timing",
+  poison: "cache-profiler.poison",
 } as const;
 
 const requestIdFrom = (context: unknown): string | undefined => {
@@ -82,6 +83,23 @@ const runTiming = async (
   }
 };
 
+const runPoison = async (
+  sdk: FrontendSDK,
+  requestId: string | undefined,
+): Promise<void> => {
+  if (requestId === undefined) {
+    sdk.window.showToast("Select a request first", { variant: "warning" });
+    return;
+  }
+  sdk.window.showToast("Unkeyed-header scan started (probes are buster-isolated)…", {
+    variant: "info",
+  });
+  const res = await sdk.backend.runPoisonOn({ requestId });
+  if (res.kind === "Error") {
+    sdk.window.showToast(res.error, { variant: "error" });
+  }
+};
+
 export const init = (sdk: FrontendSDK): void => {
   sdk.window.showToast(`Cache Profiler v${PLUGIN_VERSION} loaded`, {
     variant: "info",
@@ -122,10 +140,19 @@ export const init = (sdk: FrontendSDK): void => {
     },
   });
 
+  sdk.commands.register(Commands.poison, {
+    name: "Cache poisoning: unkeyed headers",
+    group: "Cache Profiler",
+    run: async (context) => {
+      await runPoison(sdk, requestIdFrom(context));
+    },
+  });
+
   sdk.commandPalette.register(Commands.run);
   sdk.commandPalette.register(Commands.delimiter);
   sdk.commandPalette.register(Commands.normalization);
   sdk.commandPalette.register(Commands.timing);
+  sdk.commandPalette.register(Commands.poison);
 
   for (const type of ["Request", "RequestRow"] as const) {
     sdk.menu.registerItem({
@@ -147,6 +174,11 @@ export const init = (sdk: FrontendSDK): void => {
       type,
       commandId: Commands.timing,
       leadingIcon: "fas fa-stopwatch",
+    });
+    sdk.menu.registerItem({
+      type,
+      commandId: Commands.poison,
+      leadingIcon: "fas fa-flask",
     });
   }
 

@@ -41,6 +41,12 @@ import {
   normalizationTitle,
   runNormalizationScan,
 } from "./normalize.js";
+import {
+  formatPoisonResult,
+  poisonSummary,
+  poisonTitle,
+  runUnkeyedHeaderScan,
+} from "./poison.js";
 import { runProfile } from "./profiler.js";
 import { rememberProfile } from "./store.js";
 import {
@@ -54,6 +60,7 @@ import type {
   CacheProfile,
   DelimiterResult,
   NormalizationResult,
+  PoisonResult,
   Result,
   TimingResult,
 } from "./types.js";
@@ -61,7 +68,7 @@ import type {
 type BackendSDK = SDK<never, BackendEvents>;
 
 // Bump on every build so a reload is verifiable. Surfaced on init and footed on every finding.
-export const PLUGIN_VERSION = "0.4.1";
+export const PLUGIN_VERSION = "0.5.0";
 
 function withVersion(description: string): string {
   return `${description}\n\n---\n_cache-profiler v${PLUGIN_VERSION}_`;
@@ -231,6 +238,16 @@ const runTimingOn = (
     return timingSummary(result);
   });
 
+const runPoisonOn = (
+  sdk: BackendSDK,
+  opts: RunOpts,
+): Promise<Result<{ summary: string }>> =>
+  runCommand(sdk, opts, "unkeyed-header scan", async (request, response) => {
+    const result = await runUnkeyedHeaderScan(sdk, request, response);
+    await emitPoisonFinding(sdk, request, result);
+    return poisonSummary(result);
+  });
+
 async function emitProfileFinding(
   sdk: BackendSDK,
   request: CaidoRequest,
@@ -318,11 +335,32 @@ async function emitTimingFinding(
   }
 }
 
+async function emitPoisonFinding(
+  sdk: BackendSDK,
+  request: CaidoRequest,
+  result: PoisonResult,
+): Promise<void> {
+  try {
+    await sdk.findings.create({
+      reporter: "Cache Profiler",
+      request,
+      title: poisonTitle(result),
+      description: withVersion(formatPoisonResult(result)),
+      dedupeKey: `cache-poison:${result.host}:${result.basePath}`,
+    });
+  } catch (err) {
+    sdk.console.warn(
+      `[cache-profiler] failed to create poison finding: ${String(err)}`,
+    );
+  }
+}
+
 export type API = DefineAPI<{
   runProfileOn: typeof runProfileOn;
   runDelimiterOn: typeof runDelimiterOn;
   runNormalizationOn: typeof runNormalizationOn;
   runTimingOn: typeof runTimingOn;
+  runPoisonOn: typeof runPoisonOn;
   getConfig: typeof getConfig;
   setConfig: typeof setConfig;
   getStatus: typeof getStatus;
@@ -339,6 +377,7 @@ export const init = (sdk: SDK<API, BackendEvents>): void => {
   sdk.api.register("runDelimiterOn", runDelimiterOn);
   sdk.api.register("runNormalizationOn", runNormalizationOn);
   sdk.api.register("runTimingOn", runTimingOn);
+  sdk.api.register("runPoisonOn", runPoisonOn);
   sdk.api.register("getConfig", getConfig);
   sdk.api.register("setConfig", setConfig);
   sdk.api.register("getStatus", getStatus);
