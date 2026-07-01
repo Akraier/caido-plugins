@@ -2,7 +2,7 @@ import { mountSettingsPage } from "./settings";
 import type { FrontendSDK } from "./types";
 
 // Keep in sync with PLUGIN_VERSION in the backend / caido.config.ts.
-const PLUGIN_VERSION = "0.5.0";
+const PLUGIN_VERSION = "0.6.0";
 
 const Commands = {
   run: "cache-profiler.run",

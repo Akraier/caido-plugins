@@ -348,6 +348,27 @@ Miner `resources/headers` set (deduped, request-framing headers removed), with ~
 host/URL/proto/client-IP/override vectors ordered first so an early halt still covers the best
 ones.
 
+### OOB (interactsh) pass — blind / SSRF channel
+
+When an interactsh client is enabled (see *Settings → OOB*), the scan runs a **second pass** that
+injects an interactsh payload for every header, to catch headers that are *used server-side* (a
+DNS/HTTP callback) rather than reflected — blind SSRF that a reflection-only scan can't see.
+
+- **Decoupled from the cache-poisoning verdict.** The sterile pass above stays authoritative; the
+  dotted OOB hostname can error or reroute, so it runs separately and never contaminates the
+  unkeyed+cached result. Each probe still rides a unique `cpb=` buster.
+- **Attribution by token.** Each header gets a distinct dot-free `core` token that is both the
+  reflection-search key and the leftmost label of its OOB subdomain (`<core>.<server>`), so an
+  inbound callback names the exact header.
+- **Async findings.** Callbacks arrive after the scan; they're emitted as separate
+  `OOB INTERACTION [DNS|HTTP|…] — <header>` findings, correlated within the **window** (scan
+  duration + configurable minutes, extendable). The poison finding also lists any *synchronous*
+  reflection of the OOB payload (`intact` = SSRF/redirect-grade).
+
+The interactsh client is native (no external process) — its RSA/AES + register/poll are ported
+from **[quickssrf](https://github.com/caido-community/quickssrf)** (MIT). The keypair is generated
+once and persisted in the plugin data dir.
+
 ---
 
 ## How it works (the one primitive)
@@ -376,6 +397,10 @@ The **Cache Profiler** entry in the left sidebar opens a live settings page:
 - **Five knobs** — Confirm mode, Scope, Rate, Session max, Dedupe — saved to plugin storage and
   applied to the backend **live, with no reload**.
 - **Resume** — appears only when the throttle watchdog has halted probing; clears the halt.
+- **OOB (interactsh) section** — client toggle, server URL / token / poll interval / window, a
+  live OOB status block (client state, server, interaction count, window remaining, **last
+  error**), and **Enable / Disable / Extend** buttons. Enabling registers + **self-tests** the
+  round-trip before auto-polling; any failure is toasted and shown in the status block.
 
 Configuration resolves as **env vars (seed at load) → stored settings (override) → live edits**.
 The env vars below still work for headless / first-run use; the page takes precedence once used.
@@ -390,6 +415,11 @@ The env vars below still work for headless / first-run use; the page takes prece
 | `CACHE_PROFILER_MAX` | Hard ceiling on resources probed per backend session. Default `200`. |
 | `CACHE_PROFILER_NORM_PATH` | Comparer path for **Path normalization** origin testing. Default `/`. Set to a stable, non-cached dynamic endpoint (e.g. `/profile`) when `/` is a poor comparer. |
 | `CACHE_PROFILER_DEDUPE` | Confirmed-finding granularity: `smart` (default), `host` (aggressive), `path` (granular). See *Passive detection*. |
+| `CACHE_PROFILER_OOB_CLIENT` | `on` to auto-enable the native interactsh client at load (register + self-test + poll). Default off. |
+| `CACHE_PROFILER_OOB_SERVER` | interactsh server URL (user-provided; **no default**). Required for the OOB pass. |
+| `CACHE_PROFILER_OOB_TOKEN` | Optional auth token for a self-hosted interactsh server. |
+| `CACHE_PROFILER_OOB_POLL_MS` | interactsh poll interval, ms. Default `5000`. |
+| `CACHE_PROFILER_OOB_WINDOW_MIN` | Minutes to keep correlating callbacks after a scan ends. Default `10` (extendable from the page). |
 
 The five right-click commands are always gated on **Caido scope** (`Request out of scope` if the
 host isn't in scope) regardless of these variables.
@@ -458,16 +488,27 @@ packages/backend/src/
   poison.ts      Unkeyed-header scan — buster-safety preflight, batched distinct-canary
                  detection (split-on-oversize), isolate + unkeyed+cached confirmation
   poison_headers.ts  generated Param Miner header wordlist (high-value vectors first)
+  oob/           native interactsh client (SSRF/blind channel):
+    rsa.ts / aes.ts / crypto.ts  ported pure-TS RSA-OAEP + AES (quickssrf, MIT)
+    interactsh.ts  register / poll / deregister via caido:http
+    types.ts       provider + interaction types
+    index.ts       OobController — self-test gate, persisted keys, poll loop, correlation
   store.ts       in-memory host->profile bridge (shares cached extensions between commands)
-  index.ts       passive trigger -> confirm/candidate, command registration, settings API,
-                 Finding emission
+  index.ts       passive trigger -> confirm/candidate, command registration, settings + OOB API,
+                 Finding emission (incl. async OOB findings)
   types.ts       shared types
 packages/frontend/src/
   index.ts       right-click menu items, command palette entries, result toasts, settings page
-  settings.ts    sidebar Cache Profiler page — live status + config form (storage + backend)
+  settings.ts    sidebar Cache Profiler page — live status + config form + OOB controls
 ```
 
 ---
+
+## Credits
+
+The native interactsh client (`packages/backend/src/oob/rsa.ts`, `aes.ts`, `crypto.ts`,
+`interactsh.ts`) is ported from **[quickssrf](https://github.com/caido-community/quickssrf)** by
+Caido Labs Inc., used under the MIT License. The per-file headers retain the original copyright.
 
 ## License
 

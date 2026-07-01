@@ -28,6 +28,8 @@ import {
   seedConfigFromEnv,
 } from "./config.js";
 import { ConfirmQueue, type DetectedOutcome, type V0 } from "./confirm.js";
+import { OobController, type OobStatus } from "./oob/index.js";
+import type { Interaction } from "./oob/types.js";
 import { PROBE_MARKER } from "./probe.js";
 import {
   delimiterSummary,
@@ -43,6 +45,7 @@ import {
 } from "./normalize.js";
 import {
   formatPoisonResult,
+  type OobHook,
   poisonSummary,
   poisonTitle,
   runUnkeyedHeaderScan,
@@ -68,7 +71,7 @@ import type {
 type BackendSDK = SDK<never, BackendEvents>;
 
 // Bump on every build so a reload is verifiable. Surfaced on init and footed on every finding.
-export const PLUGIN_VERSION = "0.5.0";
+export const PLUGIN_VERSION = "0.6.0";
 
 function withVersion(description: string): string {
   return `${description}\n\n---\n_cache-profiler v${PLUGIN_VERSION}_`;
@@ -78,6 +81,7 @@ function withVersion(description: string): string {
 // setConfig. The interceptor reads it per-response so changes apply with no reload.
 let cfg: RuntimeConfig;
 let queue: ConfirmQueue;
+let oob: OobController;
 
 // Comparer path for origin path-normalization (default site root). Override to a stable,
 // non-cached dynamic endpoint when "/" is a poor comparer.
@@ -128,6 +132,38 @@ const getStatus = (_sdk: BackendSDK): Promise<ConfirmStatus> => {
 
 const resumeConfirm = (_sdk: BackendSDK): Promise<boolean> => {
   queue.resume();
+  return Promise.resolve(true);
+};
+
+// ---- OOB (interactsh) API --------------------------------------------------
+
+// Toggle ON: register + self-test, then auto-poll. Any failure is returned (and surfaced via
+// getOobStatus.lastError) so the operator sees exactly why it didn't start.
+const enableOob = async (
+  _sdk: BackendSDK,
+): Promise<{ ok: boolean; error?: string }> => {
+  if (cfg.oobServer === "") {
+    return { ok: false, error: "Set an OOB server URL first." };
+  }
+  const error = await oob.enable(
+    cfg.oobServer,
+    cfg.oobToken === "" ? undefined : cfg.oobToken,
+    cfg.oobPollMs,
+  );
+  return error === undefined ? { ok: true } : { ok: false, error };
+};
+
+const disableOob = async (_sdk: BackendSDK): Promise<boolean> => {
+  await oob.disable();
+  return true;
+};
+
+const getOobStatus = (_sdk: BackendSDK): Promise<OobStatus> =>
+  Promise.resolve(oob.status());
+
+// Extend the correlation window by the configured minutes (the settings page button).
+const extendOob = (_sdk: BackendSDK): Promise<boolean> => {
+  oob.keepAlive(cfg.oobWindowMin * 60_000);
   return Promise.resolve(true);
 };
 
@@ -238,12 +274,31 @@ const runTimingOn = (
     return timingSummary(result);
   });
 
+// Correlates async OOB callbacks back to the header + request that triggered them. Keyed by the
+// dot-free `core` token; entries persist past the scan for the whole correlation window.
+type OobCorrelation = { header: string; request: CaidoRequest; host: string; basePath: string };
+const oobCorrelation = new Map<string, OobCorrelation>();
+
 const runPoisonOn = (
   sdk: BackendSDK,
   opts: RunOpts,
 ): Promise<Result<{ summary: string }>> =>
   runCommand(sdk, opts, "unkeyed-header scan", async (request, response) => {
-    const result = await runUnkeyedHeaderScan(sdk, request, response);
+    const oobHook: OobHook | undefined = oob.ready()
+      ? {
+          mintPayload: (core: string) => oob.mintPayload(core),
+          register: (core: string, header: string) =>
+            oobCorrelation.set(core, {
+              header,
+              request,
+              host: request.getHost().toLowerCase(),
+              basePath: request.getPath(),
+            }),
+          keepAlive: () => oob.keepAlive(cfg.oobWindowMin * 60_000),
+          domain: oob.status().serverHost,
+        }
+      : undefined;
+    const result = await runUnkeyedHeaderScan(sdk, request, response, oobHook);
     await emitPoisonFinding(sdk, request, result);
     return poisonSummary(result);
   });
@@ -355,6 +410,48 @@ async function emitPoisonFinding(
   }
 }
 
+// Emitted asynchronously when an interactsh callback arrives, attributed to the header + request
+// that minted the payload. Unattributed hits (e.g. the self-test) are ignored — its core is never
+// registered in oobCorrelation, so it can't match.
+function matchCorrelation(it: Interaction): OobCorrelation | undefined {
+  const hay = `${it.fullId} ${it.uniqueId} ${it.rawRequest}`.toLowerCase();
+  for (const [core, info] of oobCorrelation) {
+    if (hay.includes(core.toLowerCase())) return info;
+  }
+  return undefined;
+}
+
+async function emitOobFinding(sdk: BackendSDK, it: Interaction): Promise<void> {
+  const match = matchCorrelation(it);
+  if (match === undefined) return; // self-test or expired correlation — nothing to attribute
+
+  const proto = it.protocol.toUpperCase();
+  const description = [
+    "**OOB INTERACTION — server-side use of an unkeyed header (SSRF / blind)**",
+    "",
+    `- header: \`${match.header}\``,
+    `- target: \`${match.host}${match.basePath}\``,
+    `- protocol: \`${proto}\`${it.qType !== undefined ? ` (\`${it.qType}\`)` : ""}`,
+    `- source: \`${it.remoteAddress}\``,
+    `- time: \`${it.timestamp}\``,
+    "",
+    "The injected header value was resolved/fetched server-side — a blind SSRF / server-side " +
+      "request-forgery lead, independent of the cache-poisoning verdict.",
+  ].join("\n");
+
+  try {
+    await sdk.findings.create({
+      reporter: "Cache Profiler",
+      request: match.request,
+      title: `OOB INTERACTION [${proto}] — ${match.header} — ${match.host}`,
+      description: withVersion(description),
+      dedupeKey: `cache-oob:${it.id}`,
+    });
+  } catch (err) {
+    sdk.console.warn(`[cache-profiler] failed to create OOB finding: ${String(err)}`);
+  }
+}
+
 export type API = DefineAPI<{
   runProfileOn: typeof runProfileOn;
   runDelimiterOn: typeof runDelimiterOn;
@@ -365,6 +462,10 @@ export type API = DefineAPI<{
   setConfig: typeof setConfig;
   getStatus: typeof getStatus;
   resumeConfirm: typeof resumeConfirm;
+  enableOob: typeof enableOob;
+  disableOob: typeof disableOob;
+  getOobStatus: typeof getOobStatus;
+  extendOob: typeof extendOob;
 }>;
 
 export type { BackendEvents } from "./types.js";
@@ -382,12 +483,28 @@ export const init = (sdk: SDK<API, BackendEvents>): void => {
   sdk.api.register("setConfig", setConfig);
   sdk.api.register("getStatus", getStatus);
   sdk.api.register("resumeConfirm", resumeConfirm);
+  sdk.api.register("enableOob", enableOob);
+  sdk.api.register("disableOob", disableOob);
+  sdk.api.register("getOobStatus", getOobStatus);
+  sdk.api.register("extendOob", extendOob);
 
   cfg = seedConfigFromEnv(sdk);
   queue = new ConfirmQueue(
     { ratePerMin: cfg.rate, sessionMax: cfg.max },
     (m) => sdk.console.log(`[cache-profiler] ${m}`),
   );
+  oob = new OobController(sdk, (m) => sdk.console.log(`[cache-profiler] ${m}`));
+  oob.onInteraction((it) => void emitOobFinding(sdk, it));
+  // Auto-enable the interactsh client if the operator left the toggle on with a server set.
+  if (cfg.oobClient && cfg.oobServer !== "") {
+    void oob
+      .enable(cfg.oobServer, cfg.oobToken === "" ? undefined : cfg.oobToken, cfg.oobPollMs)
+      .then((error) => {
+        if (error !== undefined) {
+          sdk.console.warn(`[cache-profiler] oob auto-enable failed: ${error}`);
+        }
+      });
+  }
   const candidateSeen = new Set<string>();
 
   sdk.console.log(

@@ -16,6 +16,12 @@ export type RuntimeConfig = {
   rate: number; // resources probed per minute
   max: number; // hard session ceiling on probed resources
   dedupe: DedupeMode; // passive finding granularity
+  // OOB (interactsh) — for the unkeyed-header poisoning scan's blind/SSRF channel
+  oobClient: boolean; // run the native interactsh client + auto-poll
+  oobServer: string; // interactsh server URL (user-provided; no default)
+  oobToken: string; // optional auth token for self-hosted servers
+  oobPollMs: number; // poll interval (ms)
+  oobWindowMin: number; // minutes to keep correlating after a scan ends
 };
 
 function parseScope(raw: string | undefined): string[] {
@@ -42,6 +48,10 @@ function parsePositive(raw: string | undefined, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+function parseBool(raw: string | undefined): boolean {
+  return ["on", "1", "true", "yes"].includes((raw ?? "").trim().toLowerCase());
+}
+
 export function seedConfigFromEnv(sdk: AnySDK): RuntimeConfig {
   return {
     scope: parseScope(sdk.env.getVar("CACHE_PROFILER_SCOPE")),
@@ -49,6 +59,11 @@ export function seedConfigFromEnv(sdk: AnySDK): RuntimeConfig {
     rate: parsePositive(sdk.env.getVar("CACHE_PROFILER_RATE"), 30),
     max: parsePositive(sdk.env.getVar("CACHE_PROFILER_MAX"), 200),
     dedupe: parseDedupe(sdk.env.getVar("CACHE_PROFILER_DEDUPE")),
+    oobClient: parseBool(sdk.env.getVar("CACHE_PROFILER_OOB_CLIENT")),
+    oobServer: (sdk.env.getVar("CACHE_PROFILER_OOB_SERVER") ?? "").trim(),
+    oobToken: (sdk.env.getVar("CACHE_PROFILER_OOB_TOKEN") ?? "").trim(),
+    oobPollMs: parsePositive(sdk.env.getVar("CACHE_PROFILER_OOB_POLL_MS"), 5000),
+    oobWindowMin: parsePositive(sdk.env.getVar("CACHE_PROFILER_OOB_WINDOW_MIN"), 10),
   };
 }
 
@@ -65,6 +80,17 @@ export function mergeConfig(
     rate: typeof patch.rate === "number" && patch.rate > 0 ? patch.rate : current.rate,
     max: typeof patch.max === "number" && patch.max > 0 ? patch.max : current.max,
     dedupe: patch.dedupe ?? current.dedupe,
+    oobClient: typeof patch.oobClient === "boolean" ? patch.oobClient : current.oobClient,
+    oobServer: typeof patch.oobServer === "string" ? patch.oobServer.trim() : current.oobServer,
+    oobToken: typeof patch.oobToken === "string" ? patch.oobToken.trim() : current.oobToken,
+    oobPollMs:
+      typeof patch.oobPollMs === "number" && patch.oobPollMs > 0
+        ? patch.oobPollMs
+        : current.oobPollMs,
+    oobWindowMin:
+      typeof patch.oobWindowMin === "number" && patch.oobWindowMin > 0
+        ? patch.oobWindowMin
+        : current.oobWindowMin,
   };
 }
 

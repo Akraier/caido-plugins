@@ -12,7 +12,16 @@ import type { Request as CaidoRequest, Response as CaidoResponse } from "caido:u
 import { cacheState, hitsOf, isHit, randSeg, type HeaderMap } from "./cache.js";
 import { POISON_HEADERS } from "./poison_headers.js";
 import { type EngineSDK, type Probe, sendWithBody, specFor } from "./probe.js";
-import type { PoisonResult, UnkeyedHit } from "./types.js";
+import type { MatchKind, OobReflection, PoisonResult, UnkeyedHit } from "./types.js";
+
+// Supplied by the caller when an interactsh client is enabled: mints per-core OOB payloads,
+// registers each core->header for async callback attribution, and extends the correlation window.
+export type OobHook = {
+  mintPayload: (core: string) => string;
+  register: (core: string, header: string) => void;
+  keepAlive: () => void;
+  domain: string; // interactsh server host, for matchKind classification
+};
 
 const BUSTER = "cpb"; // cache-buster query parameter name
 
@@ -70,7 +79,7 @@ function queryIsUnkeyed(h: HeaderMap, age: number): boolean {
   return isHit(cacheState(h)) || age > 0;
 }
 
-type ScanCtx = { blocks: number; halted: boolean; sent: number };
+type ScanCtx = { blocks: number; halted: boolean; sent: number; domainSeen?: boolean };
 
 // Inject a whole group of headers in ONE request, each with its own canary, and return the names
 // of those whose canary reflected. A group that reflects nothing is eliminated in a single
@@ -120,10 +129,72 @@ async function probeGroup(
   return found;
 }
 
+// OOB pass: inject an interactsh payload (mintPayload(core)) for every header in a batch, register
+// each core for async callback attribution, and record any SYNCHRONOUS reflection of the payload
+// (an SSRF/redirect-grade lead before any callback). Same batching + split-on-oversize + throttle.
+async function oobProbeGroup(
+  sdk: EngineSDK,
+  base: CaidoRequest,
+  headers: string[],
+  hook: OobHook,
+  ctx: ScanCtx,
+): Promise<OobReflection[]> {
+  if (ctx.halted || headers.length === 0) return [];
+
+  const buster = `${BUSTER}=${randSeg()}`;
+  const inject: Record<string, string> = {};
+  const entries: { core: string; header: string; value: string }[] = [];
+  for (const h of headers) {
+    const core = canaryToken();
+    const value = hook.mintPayload(core);
+    inject[h] = value;
+    hook.register(core, h); // register EVERY header — a callback can fire without reflection
+    entries.push({ core, header: h, value });
+  }
+
+  const res = await sendWithBody(
+    sdk,
+    specFor(base, { appendQuery: buster, marker: true, headers: inject }),
+  );
+  ctx.sent++;
+
+  if (res.probe.status === 429 || res.probe.status === 503) {
+    if (++ctx.blocks >= THROTTLE_HALT) ctx.halted = true;
+    return [];
+  }
+  ctx.blocks = 0;
+
+  if ((res.probe.status === 431 || res.probe.status === 400) && headers.length > 1) {
+    const mid = Math.floor(headers.length / 2);
+    const left = await oobProbeGroup(sdk, base, headers.slice(0, mid), hook, ctx);
+    const right = await oobProbeGroup(sdk, base, headers.slice(mid), hook, ctx);
+    return [...left, ...right];
+  }
+
+  const hay = (
+    res.body +
+    " " +
+    Object.values(res.probe.headers).flat().join(" ")
+  ).toLowerCase();
+  const domain = hook.domain.toLowerCase();
+  if (domain.length > 0 && hay.includes(domain)) ctx.domainSeen = true;
+
+  const out: OobReflection[] = [];
+  for (const { core, header, value } of entries) {
+    let kind: MatchKind | undefined;
+    if (hay.includes(value.toLowerCase())) kind = "intact";
+    else if (hay.includes(core.toLowerCase())) kind = "core";
+    // domain-only is shared across the batch -> not attributable to one header; ctx.domainSeen note
+    if (kind !== undefined) out.push({ header, matchKind: kind });
+  }
+  return out;
+}
+
 export async function runUnkeyedHeaderScan(
   sdk: EngineSDK,
   base: CaidoRequest,
   _response: CaidoResponse | undefined,
+  oob?: OobHook,
 ): Promise<PoisonResult> {
   const host = base.getHost().toLowerCase();
   const basePath = base.getPath();
@@ -136,6 +207,9 @@ export async function runUnkeyedHeaderScan(
     tested: 0,
     hits: [],
     notes: [],
+    oobEnabled: oob !== undefined,
+    oobReflections: [],
+    oobDomainReflected: false,
   };
 
   // ---- preflight: cacheability + buster safety -------------------------
@@ -209,6 +283,36 @@ export async function runUnkeyedHeaderScan(
     result.hits.push(hit);
   }
 
+  // ---- OOB pass (interactsh) — blind / SSRF channel --------------------
+  // Separate from the (authoritative, unpolluted) sterile passes above: the dotted OOB hostname
+  // can error / reroute, so it must not contaminate the cache-poisoning verdict. Callbacks arrive
+  // asynchronously and are emitted as their own findings; this pass records synchronous hits.
+  if (oob !== undefined) {
+    oob.keepAlive(); // window covers the sweep...
+    const oobCtx: ScanCtx = { blocks: 0, halted: false, sent: 0, domainSeen: false };
+    const refl: OobReflection[] = [];
+    for (let i = 0; i < POISON_HEADERS.length && !oobCtx.halted; i += BATCH) {
+      refl.push(
+        ...(await oobProbeGroup(sdk, base, POISON_HEADERS.slice(i, i + BATCH), oob, oobCtx)),
+      );
+    }
+    oob.keepAlive(); // ...and extends past the (possibly long) sweep to now + window
+    // dedupe by header, preferring the strongest matchKind
+    const rank: Record<MatchKind, number> = { intact: 3, core: 2, domain: 1 };
+    const best = new Map<string, OobReflection>();
+    for (const r of refl) {
+      const cur = best.get(r.header);
+      if (cur === undefined || rank[r.matchKind] > rank[cur.matchKind]) best.set(r.header, r);
+    }
+    result.oobReflections = [...best.values()];
+    result.oobDomainReflected = oobCtx.domainSeen === true;
+    result.notes.push(
+      `OOB pass: injected interactsh payloads for ${POISON_HEADERS.length} headers in ` +
+        `${oobCtx.sent} batched requests; DNS/HTTP callbacks arrive as separate findings within ` +
+        `the correlation window. ${result.oobReflections.length} synchronous reflection(s).`,
+    );
+  }
+
   return result;
 }
 
@@ -270,6 +374,25 @@ export function formatPoisonResult(r: PoisonResult): string {
 
   if (r.hits.length === 0) {
     lines.push("", "- no candidate header reflected into the response.");
+  }
+
+  if (r.oobEnabled) {
+    lines.push(
+      "",
+      "**OOB (interactsh) pass**",
+      "- payloads injected for all tested headers; DNS/HTTP callbacks arrive as separate `OOB INTERACTION` findings within the correlation window.",
+    );
+    if (r.oobReflections.length > 0) {
+      lines.push("- OOB payload reflected synchronously (SSRF / redirect-grade if `intact`):");
+      for (const o of r.oobReflections) {
+        lines.push(`  - \`${o.header}\` (${o.matchKind})`);
+      }
+    }
+    if (r.oobDomainReflected) {
+      lines.push(
+        "- note: the OOB domain appeared in a response without a specific token (shared across the batch — not attributable to one header); inspect manually.",
+      );
+    }
   }
 
   for (const n of r.notes) lines.push("", `> ${n}`);

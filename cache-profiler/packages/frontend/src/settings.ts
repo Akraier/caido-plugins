@@ -65,6 +65,15 @@ function input(type: string, value: string): HTMLInputElement {
   return i;
 }
 
+function button(label: string, primary = false): HTMLButtonElement {
+  const b = document.createElement("button");
+  b.textContent = label;
+  b.style.padding = primary ? "8px 20px" : "6px 12px";
+  b.style.cursor = "pointer";
+  if (primary) b.style.fontWeight = "600";
+  return b;
+}
+
 export function mountSettingsPage(sdk: FrontendSDK): void {
   const body = document.createElement("div");
   body.style.padding = "20px";
@@ -115,11 +124,45 @@ export function mountSettingsPage(sdk: FrontendSDK): void {
     "<b>rate</b>: resources probed per minute (each ≤ 2 requests). <b>max</b>: session probe ceiling.<br>" +
     "<b>dedupe</b>: smart = static collapses per host, dynamic per path.";
 
-  const saveBtn = document.createElement("button");
-  saveBtn.textContent = "Save";
-  saveBtn.style.padding = "8px 20px";
-  saveBtn.style.cursor = "pointer";
-  saveBtn.style.fontWeight = "600";
+  const saveBtn = button("Save", true);
+
+  // ---- OOB (interactsh) controls ---------------------------------------
+  const oobServerInp = input("text", "");
+  oobServerInp.placeholder = "https://oast.example.com (interactsh server URL)";
+  const oobTokenInp = input("password", "");
+  oobTokenInp.placeholder = "optional auth token (self-hosted)";
+  const oobPollInp = input("number", "5000");
+  const oobWindowInp = input("number", "10");
+
+  const oobStatus = document.createElement("div");
+  oobStatus.style.margin = "8px 0";
+  oobStatus.style.padding = "10px 12px";
+  oobStatus.style.borderRadius = "6px";
+  oobStatus.style.background = "rgba(127,127,127,0.12)";
+  oobStatus.style.fontFamily = "monospace";
+  oobStatus.style.whiteSpace = "pre-wrap";
+  oobStatus.textContent = "oob: loading…";
+
+  const enableOobBtn = button("Enable OOB client");
+  const disableOobBtn = button("Disable");
+  const extendOobBtn = button("Extend window");
+  const oobBtns = document.createElement("div");
+  oobBtns.style.display = "flex";
+  oobBtns.style.gap = "10px";
+  oobBtns.style.margin = "8px 0 16px";
+  oobBtns.append(enableOobBtn, disableOobBtn, extendOobBtn);
+
+  const oobHeader = document.createElement("h3");
+  oobHeader.textContent = "OOB — interactsh (SSRF / blind channel)";
+  oobHeader.style.margin = "24px 0 4px";
+  const oobHelp = document.createElement("div");
+  oobHelp.style.fontSize = "12px";
+  oobHelp.style.opacity = "0.7";
+  oobHelp.style.margin = "0 0 8px";
+  oobHelp.innerHTML =
+    "Enable to run a native interactsh client: it registers, <b>self-tests</b> the round-trip, " +
+    "then auto-polls. Toggle off to inject payloads only and watch your own server. " +
+    "<b>window</b>: minutes to keep correlating callbacks after a scan (Extend to prolong).";
 
   body.append(
     status,
@@ -131,6 +174,14 @@ export function mountSettingsPage(sdk: FrontendSDK): void {
     row("Dedupe mode", dedupeSel),
     help,
     saveBtn,
+    oobHeader,
+    oobHelp,
+    oobStatus,
+    row("interactsh URL", oobServerInp),
+    row("Auth token", oobTokenInp),
+    row("Poll interval (ms)", oobPollInp),
+    row("Window (min)", oobWindowInp),
+    oobBtns,
   );
 
   // ---- behaviour -------------------------------------------------------
@@ -140,6 +191,10 @@ export function mountSettingsPage(sdk: FrontendSDK): void {
     rateInp.value = String(c.rate);
     maxInp.value = String(c.max);
     dedupeSel.value = c.dedupe;
+    oobServerInp.value = c.oobServer;
+    oobTokenInp.value = c.oobToken;
+    oobPollInp.value = String(c.oobPollMs);
+    oobWindowInp.value = String(c.oobWindowMin);
   };
 
   const collect = (): Partial<RuntimeConfig> => ({
@@ -151,6 +206,10 @@ export function mountSettingsPage(sdk: FrontendSDK): void {
     rate: Number(rateInp.value) || 30,
     max: Number(maxInp.value) || 200,
     dedupe: dedupeSel.value as DedupeMode,
+    oobServer: oobServerInp.value.trim(),
+    oobToken: oobTokenInp.value,
+    oobPollMs: Number(oobPollInp.value) || 5000,
+    oobWindowMin: Number(oobWindowInp.value) || 10,
   });
 
   const refreshStatus = async (): Promise<void> => {
@@ -168,6 +227,22 @@ export function mountSettingsPage(sdk: FrontendSDK): void {
     }
   };
 
+  const refreshOob = async (): Promise<void> => {
+    try {
+      const s = await sdk.backend.getOobStatus();
+      oobStatus.textContent =
+        `client:       ${s.enabled ? "ENABLED" : "disabled"}\n` +
+        `server:       ${s.serverHost.length > 0 ? s.serverHost : "(none)"}\n` +
+        `interactions: ${s.interactions}\n` +
+        `window:       ${s.enabled ? `${Math.ceil(s.windowEndsInMs / 60000)}m left` : "-"}\n` +
+        `error:        ${s.lastError ?? "none"}`;
+      disableOobBtn.style.display = s.enabled ? "inline-block" : "none";
+      extendOobBtn.style.display = s.enabled ? "inline-block" : "none";
+    } catch (err) {
+      oobStatus.textContent = `oob status unavailable: ${String(err)}`;
+    }
+  };
+
   saveBtn.addEventListener("click", () => {
     const patch = collect();
     void sdk.storage.set(patch);
@@ -178,12 +253,47 @@ export function mountSettingsPage(sdk: FrontendSDK): void {
     });
   });
 
+  // Enable: persist the OOB config, then register + self-test. The failure reason is surfaced.
+  enableOobBtn.addEventListener("click", () => {
+    const patch = collect();
+    patch.oobClient = true;
+    void sdk.storage.set(patch);
+    sdk.window.showToast("Enabling OOB client (register + self-test)…", { variant: "info" });
+    void sdk.backend.setConfig(patch).then(async () => {
+      const res = await sdk.backend.enableOob();
+      if (res.ok) {
+        sdk.window.showToast("OOB client enabled", { variant: "success" });
+      } else {
+        sdk.window.showToast(`OOB enable failed: ${res.error ?? "unknown"}`, {
+          variant: "error",
+        });
+      }
+      await refreshOob();
+    });
+  });
+
+  disableOobBtn.addEventListener("click", () => {
+    void sdk.backend.setConfig({ oobClient: false });
+    void sdk.backend.disableOob().then(() => {
+      sdk.window.showToast("OOB client disabled", { variant: "info" });
+      void refreshOob();
+    });
+  });
+
+  extendOobBtn.addEventListener("click", () => {
+    void sdk.backend.extendOob().then(() => {
+      sdk.window.showToast("OOB correlation window extended", { variant: "info" });
+      void refreshOob();
+    });
+  });
+
   // Seed the form: stored config wins, else the backend's env-seeded config.
   void (async () => {
     try {
       const applied = await sdk.backend.getConfig();
       fill(applied);
       await refreshStatus();
+      await refreshOob();
     } catch {
       /* backend not ready yet */
     }
@@ -198,7 +308,10 @@ export function mountSettingsPage(sdk: FrontendSDK): void {
   const startPolling = (): void => {
     if (timer !== undefined) return;
     timer = setInterval(() => {
-      if (active) void refreshStatus();
+      if (active) {
+        void refreshStatus();
+        void refreshOob();
+      }
     }, 3000);
   };
   sdk.navigation.onPageChange((e) => {

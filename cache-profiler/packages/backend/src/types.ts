@@ -153,6 +153,10 @@ export type UnkeyedHit = {
   impact?: string; // human note when the reflection sink is high-value (Location / CORS / …)
 };
 
+// How the OOB payload came back in a response — attribution/impact grade.
+export type MatchKind = "intact" | "core" | "domain";
+export type OobReflection = { header: string; matchKind: MatchKind };
+
 export type PoisonResult = {
   host: string;
   basePath: string;
@@ -163,6 +167,10 @@ export type PoisonResult = {
   tested: number; // headers injected
   hits: UnkeyedHit[];
   notes: string[];
+  // OOB (interactsh) pass — populated only when a client is enabled
+  oobEnabled: boolean;
+  oobReflections: OobReflection[]; // OOB payload reflected synchronously (SSRF/redirect grade)
+  oobDomainReflected: boolean; // OOB domain seen without a specific token (non-attributed)
 };
 
 export type ProfileStart = { url: string };
