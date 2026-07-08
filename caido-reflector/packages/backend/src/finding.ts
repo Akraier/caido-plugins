@@ -1,5 +1,5 @@
-import type { SDK } from "caido:plugin";
 import type { Request } from "caido:utils";
+import type { ReflectorSDK } from "./api";
 import type { Param } from "./extract";
 import type { ReflectionContext } from "./classify";
 import {
@@ -114,11 +114,29 @@ function buildBody(input: FindingInput, request: Request, summary: SurvivalSumma
   return lines.join("\n");
 }
 
-export async function reportFinding(sdk: SDK, request: Request, input: FindingInput): Promise<void> {
+export async function reportFinding(sdk: ReflectorSDK, request: Request, input: FindingInput): Promise<void> {
   if (input.state === "NO_REFLECTION") return;
   const summary = summarise(input.survival);
   const title = `[${input.state}] - ${titleUrl(request, input.param)}`;
   const dedupeKey = `reflector:v2:${request.getMethod()}:${request.getHost()}:${request.getPath()}:${input.param.source}:${input.param.name}:${input.context}`;
+
+  // Push a compact row to the live frontend table.
+  try {
+    const proto = request.getTls() ? "https" : "http";
+    const q = request.getQuery();
+    const url = `${proto}://${request.getHost()}${request.getPath()}${q ? `?${q}` : ""}`;
+    sdk.api.send("reflector:finding", {
+      state: input.state,
+      method: request.getMethod(),
+      url,
+      source: input.param.source,
+      param: input.param.name,
+      context: input.context,
+      poc: suggestedPayload(input.context, input.breakoutSet) ?? "",
+    });
+  } catch {
+    // frontend not listening — non-fatal
+  }
 
   try {
     await sdk.findings.create({

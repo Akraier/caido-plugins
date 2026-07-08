@@ -10,6 +10,29 @@ new state machine:
 | `ATTEMPT` | Canary reflects, some chars survive raw, but **none of them satisfy the context's break-out requirements**. |
 | `CONFIRMED` | Canary reflects, raw chars include a set that breaks the reflection context (e.g. `<` + `>` in HTML body, `"` in DQ attribute, `:` in href URL, `;` in raw JS code, etc.). |
 
+## Reflector tab
+
+A "Reflector" item in the Caido sidebar opens the control page. Five sections:
+
+- **Toggle** — ACTIVE/PAUSED with an Enable/Disable button. When PAUSED,
+  `onInterceptResponse` returns immediately (no scanning, no probes). Also
+  toggleable via the command palette (`Reflector — enable` / `— disable`).
+- **Settings** — edit `verbose` logging, `maxBodyBytes` (response size cap), and
+  the analysed `Content-Type` allow-list. These were hard-coded constants; now
+  runtime-tunable.
+- **Scan cache** — cached-page counter + "Clear cache" to force a re-scan without
+  reloading the plugin.
+- **Live findings** — reflection hits streamed to a table (state / param /
+  context / URL / PoC), filterable by state, with copy-PoC buttons.
+- **Log feed** — live mirror of the `[reflector] …` console lines.
+
+All config (including the enable/disable flag) is persisted in the plugin's
+sqlite DB (`sdk.meta.db()`, `settings` key/value table), so it survives Caido
+restarts and plugin reloads. Defaults preserve the original behaviour (ON).
+
+Findings/log rows stream from the backend via `sdk.api.send` → frontend
+`sdk.backend.onEvent` (`reflector:finding`, `reflector:log`).
+
 ## Pipeline
 
 1. **Passive**: `onInterceptResponse` extracts params (query / urlencoded form /
@@ -80,8 +103,12 @@ caido-reflector/
 │   │                    # context detection, suggested payload
 │   ├── substitute.ts    # substitute canary into request spec
 │   ├── scan-cache.ts    # page-level dedup
+│   ├── settings.ts      # persisted enable/disable flag (sqlite)
 │   ├── finding.ts       # render markdown finding for sdk.findings.create
-│   └── index.ts         # init + onInterceptResponse orchestration
+│   └── index.ts         # init + RPC (get/setEnabled) + onInterceptResponse
+├── packages/frontend/src/
+│   ├── types.ts         # FrontendSDK + backend RPC surface
+│   └── index.ts         # sidebar toggle page + command-palette enable/disable
 ├── test/
 │   ├── classify.test.ts     # context classifier + extract + isJsonContentType
 │   ├── probe.test.ts        # canary + survival + state machine

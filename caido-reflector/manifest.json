@@ -1,11 +1,10 @@
 {
   "id": "caido-reflector",
   "name": "Reflector",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Passive parameter-reflection detection with HTML/JS/attribute/URL context classification.",
   "author": {
     "name": "Akraier",
-    "email": "72752917+Akraier@users.noreply.github.com",
     "url": "https://github.com/akraier"
   },
   "plugins": [
@@ -15,6 +14,15 @@
       "name": "Reflector Backend",
       "runtime": "javascript",
       "entrypoint": "backend/script.js"
+    },
+    {
+      "kind": "frontend",
+      "id": "caido-reflector-frontend",
+      "name": "Reflector",
+      "entrypoint": "frontend/script.js",
+      "backend": {
+        "id": "caido-reflector-backend"
+      }
     }
   ]
 }
