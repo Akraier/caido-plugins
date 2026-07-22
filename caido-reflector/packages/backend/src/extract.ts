@@ -41,7 +41,7 @@ function safeDecode(s: string): string {
   }
 }
 
-function eligible(value: string): boolean {
+export function eligible(value: string): boolean {
   if (value.length < MIN_VALUE_LEN) return false;
   const lower = value.toLowerCase();
   if (STOPLIST.has(lower)) return false;
@@ -49,37 +49,37 @@ function eligible(value: string): boolean {
   return true;
 }
 
-function parseUrlencoded(body: string, source: ParamSource): Param[] {
+function parseUrlencoded(body: string, source: ParamSource, skipEligible?: boolean): Param[] {
   const out: Param[] = [];
   for (const part of body.split("&")) {
     const i = part.indexOf("=");
     if (i === -1) continue;
     const name = safeDecode(part.slice(0, i));
     const value = safeDecode(part.slice(i + 1));
-    if (name && eligible(value)) out.push({ source, name, value });
+    if (name && (skipEligible || eligible(value))) out.push({ source, name, value });
   }
   return out;
 }
 
-function walkJson(node: unknown, path: string, out: Param[]): void {
+function walkJson(node: unknown, path: string, out: Param[], skipEligible?: boolean): void {
   if (node === null || node === undefined) return;
   if (typeof node === "string") {
-    if (eligible(node)) out.push({ source: "json", name: path || "$", value: node });
+    if (skipEligible || eligible(node)) out.push({ source: "json", name: path || "$", value: node });
     return;
   }
   if (typeof node === "number" || typeof node === "boolean") return;
   if (Array.isArray(node)) {
-    node.forEach((v, i) => walkJson(v, `${path}[${i}]`, out));
+    node.forEach((v, i) => walkJson(v, `${path}[${i}]`, out, skipEligible));
     return;
   }
   if (typeof node === "object") {
     for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
-      walkJson(v, path ? `${path}.${k}` : k, out);
+      walkJson(v, path ? `${path}.${k}` : k, out, skipEligible);
     }
   }
 }
 
-function parseCookies(header: string): Param[] {
+function parseCookies(header: string, skipEligible?: boolean): Param[] {
   const out: Param[] = [];
   for (const part of header.split(";")) {
     const trimmed = part.trim();
@@ -87,7 +87,7 @@ function parseCookies(header: string): Param[] {
     if (i === -1) continue;
     const name = trimmed.slice(0, i);
     const value = safeDecode(trimmed.slice(i + 1));
-    if (eligible(value)) out.push({ source: "cookie", name, value });
+    if (skipEligible || eligible(value)) out.push({ source: "cookie", name, value });
   }
   return out;
 }
@@ -99,20 +99,25 @@ export type ExtractInput = {
   headers: Record<string, string[]>;
 };
 
-export function extractParams(input: ExtractInput): Param[] {
+export type ExtractOpts = {
+  skipEligible?: boolean;
+};
+
+export function extractParams(input: ExtractInput, opts?: ExtractOpts): Param[] {
+  const skip = opts?.skipEligible;
   const params: Param[] = [];
 
   if (input.query) {
-    params.push(...parseUrlencoded(input.query, "query"));
+    params.push(...parseUrlencoded(input.query, "query", skip));
   }
 
   const ct = input.contentType.toLowerCase();
   if (input.body) {
     if (ct.includes("application/x-www-form-urlencoded")) {
-      params.push(...parseUrlencoded(input.body, "form"));
+      params.push(...parseUrlencoded(input.body, "form", skip));
     } else if (ct.includes("application/json") || ct.includes("+json")) {
       try {
-        walkJson(JSON.parse(input.body), "", params);
+        walkJson(JSON.parse(input.body), "", params, skip);
       } catch {
         /* ignore non-JSON */
       }
@@ -122,12 +127,12 @@ export function extractParams(input: ExtractInput): Param[] {
   for (const [rawName, values] of Object.entries(input.headers)) {
     const name = rawName.toLowerCase();
     if (name === "cookie") {
-      for (const v of values) params.push(...parseCookies(v));
+      for (const v of values) params.push(...parseCookies(v, skip));
       continue;
     }
     if (HEADER_ALLOWLIST.has(name)) {
       for (const v of values) {
-        if (eligible(v)) params.push({ source: "header", name: rawName, value: v });
+        if (skip || eligible(v)) params.push({ source: "header", name: rawName, value: v });
       }
     }
   }

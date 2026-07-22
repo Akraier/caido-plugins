@@ -7,6 +7,8 @@ import {
   evaluateState,
   canaryReflected,
   detectContext,
+  detectAllContexts,
+  findAllCanaryIndexes,
   suggestedPayload,
   summarise,
   CHAR_LITERAL,
@@ -165,4 +167,55 @@ test("summarise groups raw/encoded/stripped/unknown correctly", () => {
   const summary = summarise(survival);
   assert.ok(summary.encoded.includes("LT"));
   assert.ok(summary.raw.includes("BT"));
+});
+
+test("analyseSurvival detects double-URL-encoded characters", () => {
+  const c = buildCanary("dblurl1");
+  let body = c.value;
+  const lt = CHAR_LITERAL["LT"];
+  const leftLT = c.markers["LT"].left;
+  const rightLT = c.markers["LT"].right;
+  body = body.replace(leftLT + lt + rightLT, leftLT + "%253C" + rightLT);
+  const gt = CHAR_LITERAL["GT"];
+  const leftGT = c.markers["GT"].left;
+  const rightGT = c.markers["GT"].right;
+  body = body.replace(leftGT + gt + rightGT, leftGT + "%253E" + rightGT);
+  const survival = analyseSurvival(body, c.markers);
+  assert.equal(survival["LT"], "double_url_encode");
+  assert.equal(survival["GT"], "double_url_encode");
+  assert.equal(survival["DQ"], "raw");
+});
+
+test("findAllCanaryIndexes finds multiple reflections", () => {
+  const c = buildCanary("multi1");
+  const body = `<p>${c.value}</p><script>var x = "${c.value}";</script>`;
+  const indexes = findAllCanaryIndexes(body, c);
+  assert.equal(indexes.length, 2);
+  assert.ok(indexes[0]! < indexes[1]!);
+});
+
+test("detectAllContexts returns distinct contexts for multi-reflection", () => {
+  const c = buildCanary("multi2");
+  const body = `<p>${c.value}</p><script>var x = "${c.value}";</script>`;
+  const contexts = detectAllContexts(body, c, "text/html");
+  assert.equal(contexts.length, 2);
+  const ctxNames = contexts.map((r) => r.context).sort();
+  assert.ok(ctxNames.includes("HTML_BODY"));
+  assert.ok(ctxNames.includes("JS_STRING_DQ"));
+});
+
+test("detectAllContexts dedupes same context across reflections", () => {
+  const c = buildCanary("multi3");
+  const body = `<p>${c.value}</p><div>${c.value}</div>`;
+  const contexts = detectAllContexts(body, c, "text/html");
+  assert.equal(contexts.length, 1);
+  assert.equal(contexts[0]!.context, "HTML_BODY");
+});
+
+test("detectAllContexts returns single JSON_BODY for JSON content type", () => {
+  const c = buildCanary("multi4");
+  const body = `{"a":"${c.value}","b":"${c.value}"}`;
+  const contexts = detectAllContexts(body, c, "application/json");
+  assert.equal(contexts.length, 1);
+  assert.equal(contexts[0]!.context, "JSON_BODY");
 });

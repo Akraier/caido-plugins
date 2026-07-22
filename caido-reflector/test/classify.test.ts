@@ -108,6 +108,17 @@ test("extractParams skips short and stoplisted values", () => {
   assert.deepEqual(names, ["e"]);
 });
 
+test("extractParams with skipEligible returns all params including short/stoplisted", () => {
+  const params = extractParams({
+    query: "a=ok&b=true&c=1&d=yes&e=longenoughvalue",
+    contentType: "",
+    body: "",
+    headers: {},
+  }, { skipEligible: true });
+  const names = params.map((p) => p.name).sort();
+  assert.deepEqual(names, ["a", "b", "c", "d", "e"]);
+});
+
 test("findPassiveHits returns hit when value appears in body", () => {
   const params = [{ source: "query" as const, name: "q", value: MARK }];
   const hits = findPassiveHits(params, `<p>${MARK}</p>`);

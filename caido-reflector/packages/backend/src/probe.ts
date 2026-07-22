@@ -21,6 +21,7 @@ export type CharStatus =
   | "raw"
   | "html_entity"
   | "url_encode"
+  | "double_url_encode"
   | "js_escape"
   | "unicode_escape"
   | "stripped"
@@ -102,6 +103,11 @@ function unicodeEscape(c: string): string {
   return "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0");
 }
 
+function doubleUrlEncode(c: string): string {
+  const hex = c.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0");
+  return "%25" + hex;
+}
+
 function hexEscape(c: string): string {
   return "\\x" + c.charCodeAt(0).toString(16).padStart(2, "0");
 }
@@ -130,6 +136,10 @@ export function analyseSurvival(body: string, markers: CanaryMarkers): Record<Te
     }
     if (body.includes(left + urlEncode(ch) + right) || lowerBody.includes((left + urlEncode(ch) + right).toLowerCase())) {
       out[tc] = "url_encode";
+      continue;
+    }
+    if (body.includes(left + doubleUrlEncode(ch) + right) || lowerBody.includes((left + doubleUrlEncode(ch) + right).toLowerCase())) {
+      out[tc] = "double_url_encode";
       continue;
     }
     if (body.includes(left + "\\" + ch + right)) {
@@ -167,6 +177,41 @@ export function detectContext(
     return { context: "JSON_BODY", index: idx };
   }
   return { context: classifyHit(probeBody, idx), index: idx };
+}
+
+const MAX_CANARY_REFLECTIONS = 10;
+
+export function findAllCanaryIndexes(body: string, canary: CanaryBundle): number[] {
+  const indexes: number[] = [];
+  let from = 0;
+  while (indexes.length < MAX_CANARY_REFLECTIONS) {
+    const idx = body.indexOf(canary.head, from);
+    if (idx === -1) break;
+    indexes.push(idx);
+    from = idx + canary.head.length;
+  }
+  return indexes;
+}
+
+export function detectAllContexts(
+  probeBody: string,
+  canary: CanaryBundle,
+  responseContentType: string,
+): Array<{ context: ReflectionContext; index: number }> {
+  if (isJsonContentType(responseContentType)) {
+    const idx = findCanaryIndex(probeBody, canary);
+    return idx === -1 ? [] : [{ context: "JSON_BODY", index: idx }];
+  }
+  const indexes = findAllCanaryIndexes(probeBody, canary);
+  const seen = new Set<ReflectionContext>();
+  const results: Array<{ context: ReflectionContext; index: number }> = [];
+  for (const idx of indexes) {
+    const context = classifyHit(probeBody, idx);
+    if (seen.has(context)) continue;
+    seen.add(context);
+    results.push({ context, index: idx });
+  }
+  return results;
 }
 
 const BREAKOUT_REQUIREMENTS: Record<ReflectionContext, TestChar[][]> = {

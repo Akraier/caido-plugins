@@ -282,7 +282,7 @@ function buildLog(sdk: FrontendSDK): HTMLElement {
 // ---- Page assembly --------------------------------------------------------
 
 const mountPage = (sdk: FrontendSDK): void => {
-  const root = el("div", { padding: "1.5rem", height: "100%", boxSizing: "border-box", overflow: "auto" });
+  const root = el("div", { padding: "1.5rem", minHeight: "100%", boxSizing: "border-box", overflowY: "auto" });
 
   const title = el("h1", { margin: "0 0 0.25rem 0" }, "Reflector");
   const subtitle = el("p", { margin: "0 0 1rem 0", opacity: "0.7", fontSize: "0.85rem" }, "Passive parameter-reflection detection with aggressive canary probing.");

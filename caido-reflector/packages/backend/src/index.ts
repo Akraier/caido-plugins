@@ -7,7 +7,7 @@ import {
   buildCanary,
   analyseSurvival,
   canaryReflected,
-  detectContext,
+  detectAllContexts,
   evaluateState,
 } from "./probe";
 import { buildSubstitution } from "./substitute";
@@ -119,26 +119,31 @@ async function probeAndReport(
     return;
   }
 
-  const { context, index } = detectContext(probeBody, canary, probeCT);
+  const contexts = detectAllContexts(probeBody, canary, probeCT);
+  if (contexts.length === 0) return;
+
   const survival = analyseSurvival(probeBody, canary.markers);
-  const evalResult = evaluateState(context, survival);
 
-  ilog(
-    sdk,
-    `[reflector] ${evalResult.state} ${param.name} ctx=${context} (${request.getMethod()} ${request.getHost()}${request.getPath()})`,
-  );
+  for (const { context, index } of contexts) {
+    const evalResult = evaluateState(context, survival);
 
-  await reportFinding(sdk, request, {
-    state: evalResult.state,
-    context,
-    param,
-    canary,
-    probeBody,
-    canaryIndex: index,
-    survival,
-    rationale: evalResult.rationale,
-    breakoutSet: evalResult.breakoutSet,
-  });
+    ilog(
+      sdk,
+      `[reflector] ${evalResult.state} ${param.name} ctx=${context} idx=${index} (${request.getMethod()} ${request.getHost()}${request.getPath()})`,
+    );
+
+    await reportFinding(sdk, request, {
+      state: evalResult.state,
+      context,
+      param,
+      canary,
+      probeBody,
+      canaryIndex: index,
+      survival,
+      rationale: evalResult.rationale,
+      breakoutSet: evalResult.breakoutSet,
+    });
+  }
 }
 
 async function onResponse(sdk: ReflectorSDK, request: Request, response: Response): Promise<void> {
@@ -155,12 +160,13 @@ async function onResponse(sdk: ReflectorSDK, request: Request, response: Respons
     const reqHeaders = request.getHeaders();
     const reqContentType = getHeader(reqHeaders, "content-type");
     const reqBody = request.getBody()?.toText() ?? "";
-    const params = extractParams({
+    const extractInput = {
       query: request.getQuery(),
       contentType: reqContentType,
       body: reqBody,
       headers: reqHeaders,
-    });
+    };
+    const params = extractParams(extractInput, { skipEligible: true });
     if (params.length === 0) {
       vlog(sdk, `[reflector] no-params ${where}`);
       return;
@@ -177,18 +183,17 @@ async function onResponse(sdk: ReflectorSDK, request: Request, response: Respons
     if (!body) return;
 
     const hits = findPassiveHits(params, body);
-    if (hits.length === 0) {
-      vlog(sdk, `[reflector] no-reflection ${where} (cached)`);
-      return;
+    if (hits.length > 0) {
+      vlog(sdk, `[reflector] ${hits.length} passive match(es) for ${where}`);
     }
 
     const probedKey = new Set<string>();
-    ilog(sdk, `[reflector] HIT ${where} ${hits.length} passive match(es) — probing`);
-    for (const hit of hits) {
-      const k = `${hit.param.source}:${hit.param.name}`;
+    ilog(sdk, `[reflector] PROBE ${where} ${params.length} param(s)`);
+    for (const param of params) {
+      const k = `${param.source}:${param.name}`;
       if (probedKey.has(k)) continue;
       probedKey.add(k);
-      await probeAndReport(sdk, request, hit.param);
+      await probeAndReport(sdk, request, param);
     }
   } catch (e) {
     ilog(sdk, `[reflector] handler error: ${String(e)}`);

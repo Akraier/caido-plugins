@@ -1,7 +1,7 @@
 {
   "id": "caido-reflector",
   "name": "Reflector",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Passive parameter-reflection detection with HTML/JS/attribute/URL context classification.",
   "author": {
     "name": "Akraier",
