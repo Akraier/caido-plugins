@@ -223,6 +223,7 @@ export async function runSuite(
         breakPayload: equalised.breakPayload,
         escapePayload: equalised.escapePayload,
         build,
+        label: probe.id,
         ...(endAnchored ? { endAnchored: true } : {}),
       };
 
@@ -272,8 +273,12 @@ export async function runSuite(
 
       // Candidate. Re-measure once so the control arms have a live reference, then spend them.
       const refCanary = canaryFor();
-      const breakSend = await transport.send(build(arms.breakPayload, refCanary));
-      const escapeSend = await transport.send(build(arms.escapePayload, refCanary));
+      const breakSend = await transport.send(build(arms.breakPayload, refCanary), {
+        label: `${probe.id}:remeasure-break`,
+      });
+      const escapeSend = await transport.send(build(arms.escapePayload, refCanary), {
+        label: `${probe.id}:remeasure-escape`,
+      });
       if (
         isHalted(breakSend) ||
         !isUsable(breakSend) ||
@@ -319,7 +324,9 @@ export async function runSuite(
         const perWitness: Side[][] = live.map(() => []);
         for (let replicate = 0; replicate < 2; replicate++) {
           const canary = canaryFor();
-          const result = await transport.send(build(arm.payload, canary));
+          const result = await transport.send(build(arm.payload, canary), {
+            label: `${probe.id}:control-${arm.name}`,
+          });
           if (isHalted(result) || !isUsable(result)) {
             controlFailed = true;
             break;
@@ -376,7 +383,10 @@ export async function runSuite(
       // Persisted evidence: re-send the winning break arm so a finding can cite the exact exchange
       // its claim was computed from.
       let evidenceRequestId: string | undefined;
-      const evidence = await transport.send(build(arms.breakPayload, refCanary), { persist: true });
+      const evidence = await transport.send(build(arms.breakPayload, refCanary), {
+        persist: true,
+        label: `${probe.id}:evidence`,
+      });
       if (!isHalted(evidence) && isUsable(evidence)) {
         evidenceRequestId = evidence.response.requestId;
       }

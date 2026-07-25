@@ -77,6 +77,8 @@ export interface ProbeArms {
    * is coarser as a result, which is the price of testing the semantics at all.
    */
   readonly endAnchored?: boolean;
+  /** Tag recorded in the transport log, so a log line says which probe produced it. */
+  readonly label?: string;
 }
 
 interface MiniPairResult {
@@ -110,12 +112,17 @@ async function sendMiniPair(
     arms.endAnchored === true ? { left: c.left } : c;
 
   const firstCanary = frame(deps.canary());
-  const firstResult = await deps.transport.send(arms.build(first, firstCanary));
+  const firstArm = breakFirst ? "break" : "escape";
+  const firstResult = await deps.transport.send(arms.build(first, firstCanary), {
+    label: `${arms.label ?? "probe"}:${firstArm}`,
+  });
   if (isHalted(firstResult)) return { ok: false, failure: "halted", sends: 1 };
   if (!isUsable(firstResult)) return { ok: false, failure: firstResult, sends: 1 };
 
   const secondCanary = frame(deps.canary());
-  const secondResult = await deps.transport.send(arms.build(second, secondCanary));
+  const secondResult = await deps.transport.send(arms.build(second, secondCanary), {
+    label: `${arms.label ?? "probe"}:${breakFirst ? "escape" : "break"}`,
+  });
   if (isHalted(secondResult)) return { ok: false, failure: "halted", sends: 2 };
   if (!isUsable(secondResult)) return { ok: false, failure: secondResult, sends: 2 };
 

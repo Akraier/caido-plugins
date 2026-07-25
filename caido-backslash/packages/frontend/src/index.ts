@@ -25,8 +25,15 @@ import type {
   ScanProgress,
   ScanRequestInput,
   ScanResult,
+  SendLogBatch,
+  SendLogEntry,
 } from "../../shared/src/api.ts";
-import { EVENT_DONE, EVENT_FINDING, EVENT_PROGRESS } from "../../shared/src/api.ts";
+import {
+  EVENT_DONE,
+  EVENT_FINDING,
+  EVENT_PROGRESS,
+  EVENT_SENDS,
+} from "../../shared/src/api.ts";
 
 type App = Caido<BackslashApi, BackslashEvents>;
 
@@ -39,6 +46,14 @@ interface Settings {
   maxConcurrent: number;
   slotFilter: string;
 }
+
+/**
+ * Maximum log lines kept in the DOM per scan.
+ *
+ * A scan can emit thousands of sends. Rendering them all would make the page unusable, so the view
+ * is a tail and states how many lines it is not showing rather than pretending it has everything.
+ */
+const LOG_VIEW_CAP = 500;
 
 const DEFAULTS: Settings = {
   aggressivity: "medium",
@@ -68,7 +83,11 @@ interface ScanTab {
   readonly pane: HTMLDivElement;
   readonly statusLine: HTMLDivElement;
   readonly findingsBox: HTMLDivElement;
+  readonly logBox: HTMLDivElement;
+  readonly viewToggle: HTMLDivElement;
   findingCount: number;
+  logShown: number;
+  logTotal: number;
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -154,6 +173,36 @@ function renderFinding(finding: ScanFinding): HTMLElement {
   }
 
   return card;
+}
+
+/**
+ * One transport-log line.
+ *
+ * Colour carries the outcome because that is the thing worth scanning for by eye: a wall of plain
+ * lines with amber and red among them tells you instantly whether the target started refusing.
+ */
+function renderSend(entry: SendLogEntry): HTMLElement {
+  const colour =
+    entry.outcome === "usable"
+      ? "opacity:0.85;"
+      : entry.outcome === "soft-fail"
+        ? "color:#fde68a;"
+        : "color:#fca5a5;font-weight:600;";
+
+  const time = new Date(entry.atMs).toISOString().slice(11, 23);
+  const status = entry.status === undefined ? "---" : String(entry.status);
+  const size = entry.bodyLength === undefined ? "" : `${entry.bodyLength}b`;
+  const rtt = entry.rttMs === undefined ? "" : `${entry.rttMs}ms`;
+  const note = entry.reason === undefined ? "" : ` ${entry.reason}`;
+  const saved = entry.persisted ? " [saved]" : "";
+  const target = entry.target.length > 96 ? `${entry.target.slice(0, 93)}...` : entry.target;
+
+  return el(
+    "div",
+    `${time}  ${String(entry.seq).padStart(5)}  ${status}  ${size.padStart(7)} ${rtt.padStart(6)}  ` +
+      `${(entry.label ?? "-").padEnd(30)} ${entry.method} ${target}${note}${saved}`,
+    `white-space:pre;${colour}`,
+  );
 }
 
 export function init(sdk: App): void {
@@ -311,6 +360,17 @@ export function init(sdk: App): void {
     form.append(row("concurrency", concurrency, "requests in flight at once"));
     form.append(row("parameter", slot, "leave empty to scan every enumerated surface"));
 
+    // Not a choice: every request is saved. Stated so the volume is not a surprise.
+    form.append(
+      el(
+        "div",
+        `Every request is saved to Caido's HTTP history and is replayable there. Expect roughly ` +
+          `50-150 requests per parameter, so a full scan of this request will add a few hundred to ` +
+          `a few thousand entries.`,
+        "opacity:0.6;font-size:11px;margin-bottom:10px;",
+      ),
+    );
+
     // Two concurrent scans have independent throttles, so the combined rate against one host is the
     // sum. Worth saying out loud before the operator doubles their own request rate by accident.
     const sameHostRunning = tabs.some(
@@ -379,6 +439,7 @@ export function init(sdk: App): void {
     form.remove();
     tab.statusLine.style.display = "block";
     tab.statusLine.textContent = `${tab.scanId} starting`;
+    tab.viewToggle.style.display = "flex";
     tab.findingsBox.style.display = "block";
   }
 
@@ -394,8 +455,10 @@ export function init(sdk: App): void {
 
     const pane = el("div", undefined, "display:none;");
     const statusLine = el("div", undefined, `${MONO}margin-bottom:10px;opacity:0.85;display:none;`);
+    const viewToggle = el("div", undefined, "display:none;gap:6px;margin-bottom:8px;");
     const findingsBox = el("div", undefined, "display:none;");
-    pane.append(statusLine, findingsBox);
+    const logBox = el("div", undefined, `display:none;${MONO}font-size:11px;line-height:1.45;`);
+    pane.append(statusLine, viewToggle, findingsBox, logBox);
 
     const tab: ScanTab = {
       key: `tab-${tabCounter}`,
@@ -406,8 +469,30 @@ export function init(sdk: App): void {
       pane,
       statusLine,
       findingsBox,
+      logBox,
+      viewToggle,
       findingCount: 0,
+      logShown: 0,
+      logTotal: 0,
     };
+
+    // Findings and the raw transport log are different questions: "what did you conclude" and
+    // "what did you actually send". Both matter, so they are peers rather than one nested in the other.
+    const showFindings = el("button", "Findings");
+    const showLog = el("button", "Requests");
+    const toggleStyle = (active: boolean): string =>
+      "padding:3px 10px;border-radius:3px;border:1px solid #374151;cursor:pointer;font-size:11px;" +
+      (active ? "background:#1f2937;font-weight:600;" : "background:transparent;");
+    const setView = (view: "findings" | "requests"): void => {
+      findingsBox.style.display = view === "findings" ? "block" : "none";
+      logBox.style.display = view === "requests" ? "block" : "none";
+      showFindings.style.cssText = toggleStyle(view === "findings");
+      showLog.style.cssText = toggleStyle(view === "requests");
+    };
+    showFindings.onclick = () => setView("findings");
+    showLog.onclick = () => setView("requests");
+    setView("findings");
+    viewToggle.append(showFindings, showLog);
 
     tabButton.onclick = () => select(tab);
     closeButton.onclick = (event) => {
@@ -448,6 +533,30 @@ export function init(sdk: App): void {
     tab.findingsBox.prepend(renderFinding(finding));
   });
 
+  sdk.backend.onEvent(EVENT_SENDS, (batch: SendLogBatch) => {
+    const tab = byScanId.get(batch.scanId);
+    if (tab === undefined) return;
+
+    for (const entry of batch.entries) {
+      tab.logBox.append(renderSend(entry));
+      tab.logShown += 1;
+    }
+    tab.logTotal = batch.totalSends;
+
+    // Trim the oldest lines rather than letting the DOM grow without bound.
+    while (tab.logShown > LOG_VIEW_CAP && tab.logBox.firstChild !== null) {
+      tab.logBox.firstChild.remove();
+      tab.logShown -= 1;
+    }
+
+    // Say plainly when the view is a tail: a truncated log that looks complete is worse than none.
+    const hidden = tab.logTotal - tab.logShown;
+    tab.viewToggle.title =
+      hidden > 0
+        ? `showing the last ${tab.logShown} of ${tab.logTotal} sends`
+        : `${tab.logTotal} sends`;
+  });
+
   sdk.backend.onEvent(EVENT_DONE, (result: ScanResult) => {
     const tab = byScanId.get(result.scanId);
     if (tab === undefined) return;
@@ -457,6 +566,16 @@ export function init(sdk: App): void {
     const halted = result.haltReason === undefined ? "" : `  HALTED (${result.haltReason})`;
     tab.statusLine.textContent =
       `${result.scanId} finished  sends ${result.sends}  findings ${result.findings.length}${halted}`;
+
+    if (tab.logTotal > tab.logShown) {
+      tab.logBox.prepend(
+        el(
+          "div",
+          `... ${tab.logTotal - tab.logShown} earlier sends not shown (view keeps the last ${LOG_VIEW_CAP})`,
+          "opacity:0.6;margin-bottom:6px;",
+        ),
+      );
+    }
 
     if (result.deferredSurfaces.length > 0) {
       const deferred = el("div", undefined, `margin:10px 0;${MONO}font-size:11px;opacity:0.7;`);

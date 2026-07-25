@@ -10,8 +10,32 @@
 export const EVENT_PROGRESS = "backslash:progress";
 export const EVENT_FINDING = "backslash:finding";
 export const EVENT_DONE = "backslash:done";
+/** Transport log lines, batched: a long scan emits thousands and one event each would flood IPC. */
+export const EVENT_SENDS = "backslash:sends";
 
 export type ScanAggressivity = "low" | "medium" | "high";
+
+/** One line of the transport log, as shown in the UI. */
+export interface SendLogEntry {
+  readonly seq: number;
+  readonly atMs: number;
+  readonly label?: string;
+  readonly method: string;
+  readonly target: string;
+  readonly outcome: "usable" | "soft-fail" | "hard-fail" | "halted";
+  readonly reason?: string;
+  readonly status?: number;
+  readonly bodyLength?: number;
+  readonly rttMs?: number;
+  readonly persisted: boolean;
+}
+
+export interface SendLogBatch {
+  readonly scanId: string;
+  readonly entries: readonly SendLogEntry[];
+  /** Total sends so far, so the UI can show how many lines it is not retaining. */
+  readonly totalSends: number;
+}
 
 export interface ScanRequestInput {
   /** Caido request id to scan. */
@@ -106,6 +130,7 @@ export type ApiResult<T> =
  */
 export type BackslashEvents = {
   "backslash:progress": (progress: ScanProgress) => void;
+  "backslash:sends": (batch: SendLogBatch) => void;
   "backslash:finding": (finding: ScanFinding) => void;
   "backslash:done": (result: ScanResult) => void;
 };

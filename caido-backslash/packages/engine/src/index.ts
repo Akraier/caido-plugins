@@ -37,6 +37,7 @@ export {
 // ---- throttling and halt supervision ----
 export type {
   HaltReason,
+  SendRecord,
   ProbeResult,
   ProbeTransport,
   ProbeTransportStats,

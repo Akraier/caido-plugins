@@ -12,6 +12,7 @@ import {
   DEFAULT_THROTTLE,
   createProbeTransport,
   enumerateSlots,
+  type SendRecord,
   locate,
   runSuite,
   type ProbeTransport,
@@ -25,7 +26,13 @@ import type {
   ScanRequestInput,
   ScanResult,
 } from "../../shared/src/api.ts";
-import { EVENT_DONE, EVENT_FINDING, EVENT_PROGRESS } from "../../shared/src/api.ts";
+import type { SendLogEntry } from "../../shared/src/api.ts";
+import {
+  EVENT_DONE,
+  EVENT_FINDING,
+  EVENT_PROGRESS,
+  EVENT_SENDS,
+} from "../../shared/src/api.ts";
 
 import { createCaidoProvider } from "./caido-transport.ts";
 
@@ -35,6 +42,7 @@ import { createCaidoProvider } from "./caido-transport.ts";
  */
 export type Events = DefineEvents<{
   "backslash:progress": (progress: ScanProgress) => void;
+  "backslash:sends": (batch: import("../../shared/src/api.ts").SendLogBatch) => void;
   "backslash:finding": (finding: ScanFinding) => void;
   "backslash:done": (result: ScanResult) => void;
 }>;
@@ -63,6 +71,7 @@ interface ActiveScan {
 }
 
 const scans = new Map<string, ActiveScan>();
+const sendLogs = new Map<string, { record: (r: SendRecord) => void; flush: () => void }>();
 let scanCounter = 0;
 
 function ok<T>(value: T): ApiResult<T> {
@@ -267,6 +276,7 @@ async function runScan(sdk: BackendSDK, scanId: string, input: ScanRequestInput)
       deferredSurfaces: enumeration.deferred.map((d) => ({ kind: d.kind, reason: d.reason })),
       ...(summary.haltReason === undefined ? {} : { haltReason: summary.haltReason }),
     };
+    sendLogs.get(scanId)?.flush();
     sdk.api.send(EVENT_DONE, active.result);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -280,8 +290,59 @@ async function runScan(sdk: BackendSDK, scanId: string, input: ScanRequestInput)
       sends: active.transport.stats().sent,
       deferredSurfaces: [],
     };
+    sendLogs.get(scanId)?.flush();
     sdk.api.send(EVENT_DONE, active.result);
   }
+}
+
+/**
+ * Batch transport log lines before pushing them to the frontend.
+ *
+ * A scan produces thousands of sends. One IPC event each would swamp the channel and the UI, so
+ * lines are coalesced by count or by a short interval, whichever comes first.
+ */
+function createSendLog(
+  sdk: BackendSDK,
+  scanId: string,
+): { record: (r: SendRecord) => void; flush: () => void } {
+  const BATCH = 25;
+  const FLUSH_MS = 250;
+  let pending: SendLogEntry[] = [];
+  let total = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const flush = (): void => {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+    if (pending.length === 0) return;
+    const entries = pending;
+    pending = [];
+    sdk.api.send(EVENT_SENDS, { scanId, entries, totalSends: total });
+  };
+
+  return {
+    record: (r: SendRecord) => {
+      total += 1;
+      pending.push({
+        seq: r.seq,
+        atMs: r.atMs,
+        method: r.method,
+        target: r.target,
+        outcome: r.outcome,
+        persisted: r.persisted,
+        ...(r.label === undefined ? {} : { label: r.label }),
+        ...(r.reason === undefined ? {} : { reason: r.reason }),
+        ...(r.status === undefined ? {} : { status: r.status }),
+        ...(r.bodyLength === undefined ? {} : { bodyLength: r.bodyLength }),
+        ...(r.rttMs === undefined ? {} : { rttMs: r.rttMs }),
+      });
+      if (pending.length >= BATCH) flush();
+      else if (timer === undefined) timer = setTimeout(flush, FLUSH_MS);
+    },
+    flush,
+  };
 }
 
 async function startScan(
@@ -291,11 +352,17 @@ async function startScan(
   scanCounter += 1;
   const scanId = `scan-${scanCounter}`;
 
+  const sendLog = createSendLog(sdk, scanId);
+  sendLogs.set(scanId, sendLog);
+
   const transport = createProbeTransport(
     {
+      // Every request is saved, unconditionally: see caido-transport.ts. The operator must be able
+      // to inspect and replay the scan's real traffic, not just read counters.
       provider: createCaidoProvider(sdk),
       sleep: (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
       now: () => Date.now(),
+      onSend: sendLog.record,
     },
     {
       ...DEFAULT_THROTTLE,

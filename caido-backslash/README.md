@@ -44,11 +44,16 @@ Findings are written to Caido's own Findings page as well. Core `FindingSpec` ha
 so confidence is carried in the description text — the community scanner works around the same gap
 the same way.
 
-Probe traffic is sent with `save: false` so thousands of requests do not flood the project database.
-When a finding is confirmed, the winning break arm is re-sent with `save: true` and *that* request is
-the one cited, which guarantees the attached exchange is the one the claim was computed from. Note
-this only works because the plugin is standalone: routed through the community scanner's queue, the
-options argument is dropped and every send is persisted regardless.
+**Every request the plugin sends is saved** to Caido's HTTP history and is inspectable and replayable
+there. There is no option to turn that off. An earlier version sent probes unsaved to keep the project
+database small; that was the wrong trade, because it made the scan's actual traffic invisible and left
+the operator reading counters. Expect roughly 50-150 requests per parameter, so a full scan adds a few
+hundred to a few thousand history entries.
+
+The plugin also keeps its own transport log per scan, under the **Requests** tab. It shows what HTTP
+history cannot: which probe and which arm each request belonged to, how the response was classified
+(usable, soft-fail, hard-fail), and the reason when a firewall or rate limiter intervened. That view
+holds the last 500 lines and says how many earlier ones it is not showing.
 
 ## Try it without Caido
 

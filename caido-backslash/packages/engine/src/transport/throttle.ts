@@ -114,10 +114,58 @@ export interface ProbeTransport {
   halt(reason: HaltReason): void;
 }
 
+/**
+ * One line of the transport log.
+ *
+ * Emitted for every send, including the ones that produced nothing usable. Visibility into the
+ * blocked and dropped requests matters more than into the successful ones: a scan that quietly
+ * stopped learning anything looks identical to a clean scan from the outside.
+ */
+export interface SendRecord {
+  /** Monotonic sequence number within this transport. */
+  readonly seq: number;
+  readonly atMs: number;
+  /** Caller-supplied tag, typically probe id and arm. */
+  readonly label?: string;
+  readonly method: string;
+  readonly target: string;
+  readonly host: string;
+  /** How the response was classified. */
+  readonly outcome: "usable" | "soft-fail" | "hard-fail" | "halted";
+  /** Soft-fail reason or transport failure kind. */
+  readonly reason?: string;
+  readonly status?: number;
+  readonly bodyLength?: number;
+  readonly rttMs?: number;
+  /** Whether the host was asked to persist this request. */
+  readonly persisted: boolean;
+}
+
 export interface ProbeTransportDeps {
   readonly provider: RequestProvider;
   readonly sleep: SleepFn;
   readonly now: NowFn;
+  /**
+   * Called once per send. Kept as a callback rather than an accumulating array so the host decides
+   * the retention policy; a long scan produces thousands of these.
+   */
+  readonly onSend?: (record: SendRecord) => void;
+}
+
+/** First line of the raw request, split into method and target. Bounded scan, no allocation of the body. */
+function requestLine(raw: Uint8Array): { method: string; target: string } {
+  let end = 0;
+  const limit = Math.min(raw.length, 8192);
+  while (end < limit && raw[end] !== 0x0a && raw[end] !== 0x0d) end++;
+  let line = "";
+  for (let i = 0; i < end; i++) line += String.fromCharCode(raw[i]!);
+  const firstSpace = line.indexOf(" ");
+  if (firstSpace === -1) return { method: "?", target: line };
+  const lastSpace = line.lastIndexOf(" ");
+  return {
+    method: line.slice(0, firstSpace),
+    target: line.slice(firstSpace + 1, lastSpace > firstSpace ? lastSpace : undefined),
+  };
 }
 
 export function createProbeTransport(
@@ -126,6 +174,7 @@ export function createProbeTransport(
   admissionOptions: () => AdmissionOptions = () => ({}),
 ): ProbeTransport {
   const { provider, sleep, now } = deps;
+  let seq = 0;
 
   let state: ThrottleState = "running";
   let haltReason: HaltReason | undefined;
@@ -244,13 +293,38 @@ export function createProbeTransport(
     waiters.shift()?.();
   }
 
+  /** Emit one log line. Cheap enough to call on every send; the host decides what to retain. */
+  function log(
+    request: EngineRequest,
+    options: SendOptions | undefined,
+    outcome: SendRecord["outcome"],
+    extra: { reason?: string; status?: number; bodyLength?: number; rttMs?: number },
+  ): void {
+    if (deps.onSend === undefined) return;
+    seq += 1;
+    const { method, target } = requestLine(request.raw);
+    deps.onSend({
+      seq,
+      atMs: now(),
+      method,
+      target,
+      host: request.host,
+      outcome,
+      persisted: options?.persist === true,
+      ...(options?.label === undefined ? {} : { label: options.label }),
+      ...extra,
+    });
+  }
+
   return {
     async send(request, options): Promise<ProbeResult> {
       if (currentState() === "halted") {
+        log(request, options, "halted", { reason: haltReason?.kind ?? "cancelled" });
         return { kind: "halted", reason: haltReason ?? { kind: "cancelled" } };
       }
       if (options?.signal?.aborted === true) {
         doHalt({ kind: "cancelled" });
+        log(request, options, "halted", { reason: "cancelled" });
         return { kind: "halted", reason: { kind: "cancelled" } };
       }
 
@@ -273,6 +347,22 @@ export function createProbeTransport(
       }
 
       record(tally, admission);
+
+      if (admission.kind === "usable") {
+        log(request, options, "usable", {
+          status: admission.response.status,
+          bodyLength: admission.response.raw.length - admission.response.bodyStart,
+          rttMs: admission.response.roundtripMs,
+        });
+      } else if (admission.kind === "soft-fail") {
+        log(request, options, "soft-fail", {
+          reason: admission.signal ?? admission.reason,
+          status: admission.response.status,
+          rttMs: admission.response.roundtripMs,
+        });
+      } else {
+        log(request, options, "hard-fail", { reason: admission.failure });
+      }
 
       if (admission.kind === "usable") {
         consecutiveSoftFails = 0;

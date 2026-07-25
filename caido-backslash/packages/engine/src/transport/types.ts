@@ -89,6 +89,11 @@ export interface SendOptions {
    * was computed from.
    */
   readonly persist?: boolean;
+  /**
+   * Free-form tag recorded against this send in the transport log, e.g. which probe and which arm.
+   * The transport cannot know that itself, so the caller supplies it.
+   */
+  readonly label?: string;
 }
 
 /**

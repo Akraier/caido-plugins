@@ -13,12 +13,12 @@
  *    `RequestSpec` would rewrite the Host header and recompute Content-Length, which would break the
  *    permutation null the detector depends on.
  *
- * 2. `sdk.requests.send(spec, options)` accepts `save`. This matters more than it looks: the
- *    community scanner's wrapped SDK drops the options argument entirely, so inside that engine
- *    `save: false` type-checks and is silently ignored. Standalone, we call the SDK directly and the
- *    probe-unsaved / evidence-saved split actually works. Probe traffic runs into the thousands, so
- *    persisting all of it would flood the project database, but a finding can only cite a request
- *    the host stored.
+ * 2. **Every request is saved. Without exception.** An earlier version sent probes with
+ *    `save: false` to keep the project database small, which was the wrong trade: it made the
+ *    scan's actual traffic invisible to the operator, who could see counters but never the requests.
+ *    For a tool that fires hundreds of requests at a third-party target during an engagement, being
+ *    able to inspect and replay every single one is worth far more than a compact database. There is
+ *    deliberately no option to turn this off.
  */
 
 import type { SDK } from "caido:plugin";
@@ -78,25 +78,7 @@ function toEngineResponse(
   return requestId === undefined ? base : { ...base, requestId };
 }
 
-export interface CaidoTransportOptions {
-  /**
-   * Persist probe traffic. Off by default.
-   *
-   * With this off, probes leave no trace in the project database and their request ids come back as
-   * 0, which means they cannot be cited by a finding. That is intentional: the confirmation re-send
-   * is what produces citable evidence, and it guarantees the request attached to a finding is the
-   * exact exchange the claim was computed from. The prior implementation attached its *fastest*
-   * request while computing evidence from its *last*, so findings could not be reproduced by hand.
-   */
-  readonly persistProbes?: boolean;
-}
-
-export function createCaidoProvider(
-  sdk: SDK,
-  options: CaidoTransportOptions = {},
-): RequestProvider {
-  const persistProbes = options.persistProbes ?? false;
-
+export function createCaidoProvider(sdk: SDK): RequestProvider {
   return {
     async send(request: EngineRequest, sendOptions?: SendOptions): Promise<SendOutcome> {
       // Only the scheme, host and port are taken from this URL; the path and everything else comes
@@ -112,11 +94,12 @@ export function createCaidoProvider(
         return { kind: "failed", failure, detail };
       }
 
-      const save = sendOptions?.persist ?? persistProbes;
-
       try {
         const sent = await sdk.requests.send(spec, {
-          save,
+          // Always. Every request this plugin makes is inspectable and replayable in Caido.
+          // `sendOptions.persist` is ignored here: it marks the evidence re-send for hosts that
+          // distinguish the two, and there is no case in which we would want a probe to vanish.
+          save: true,
           ...(sendOptions?.timeoutMs === undefined
             ? {}
             : { timeouts: { response: Math.ceil(sendOptions.timeoutMs / 1000) } }),
@@ -133,8 +116,8 @@ export function createCaidoProvider(
             response.getCode(),
             response.getHeaders(),
             response.getRoundtripTime(),
-            // An unsaved request comes back with id 0, which cannot be attached to a finding.
-            // Report it as absent rather than as a valid reference.
+            // Everything is saved, so this should always be a real id. Guard anyway: reporting a
+            // placeholder id as valid would attach a finding to nothing.
             id === "0" || id === "" ? undefined : id,
           ),
         };
