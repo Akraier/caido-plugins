@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { runSuite } from "../src/detect/runner.ts";
-import { DELIMITER_PROBES } from "../src/probes/catalogue.ts";
+import { ALL_STATIC_PROBES, DELIMITER_PROBES } from "../src/probes/catalogue.ts";
 import { enumerateSlots } from "../src/request/slots.ts";
 import { asciiBytes, locate } from "../src/request/template.ts";
 import { findBodyStart } from "../src/response/scan.ts";
@@ -35,7 +35,11 @@ function respond(status: number, body: string): SendOutcome {
 /** A suite over a fixed target, with an injected clock and coin so runs are reproducible. */
 function harness(
   target: () => SendOutcome,
-  options: { cancelAfterSends?: number; haltMinObservations?: number } = {},
+  options: {
+    cancelAfterSends?: number;
+    haltMinObservations?: number;
+    probes?: typeof DELIMITER_PROBES;
+  } = {},
 ) {
   const template = locate(asciiBytes(REQUEST));
   const slots = enumerateSlots(template).slots.filter((s) => s.kind === "query-value");
@@ -80,7 +84,7 @@ function harness(
       runSuite({
         template,
         slots,
-        probes: DELIMITER_PROBES,
+        probes: options.probes ?? DELIMITER_PROBES,
         target: { host: "shop.test", port: 443, tls: true },
         transport,
         random: () => {
@@ -177,5 +181,30 @@ describe("suite termination", () => {
     const stopNotes = summary.diagnostics.filter((d) => d.probeId === "-");
     expect(stopNotes).toHaveLength(1);
     expect(stopNotes[0]!.detail).toMatch(/transport halted/);
+  });
+});
+
+
+describe("ERB and EJS template injection", () => {
+  it("ships a probe for the ERB and EJS delimiter family", () => {
+    // Regression: the catalogue had no <% %> probe at all, so plain ERB injection was invisible.
+    const probe = ALL_STATIC_PROBES.find((p) => p.id === "interp.erb")!;
+    expect(probe).toBeDefined();
+    expect(probe.wireForm).toBe("literal-raw-percent");
+  });
+
+  it("declares the ERB probes with a raw percent, or the delimiters never arrive", () => {
+    // With % encoded, "<%z" leaves as "<%25z" and "z%>" as "z%25>": the syntax under test is gone.
+    for (const id of ["interp.erb", "interp.erb-eval", "interp.percent"]) {
+      const probe = ALL_STATIC_PROBES.find((p) => p.id === id)!;
+      expect(probe.wireForm, id).toBe("literal-raw-percent");
+    }
+  });
+
+  it("keeps the ERB evaluation arms the same length", () => {
+    const probe = ALL_STATIC_PROBES.find((p) => p.id === "interp.erb-eval")!;
+    const lengths = new Set([...probe.breaks, ...probe.escapeSets.flat()].map((p) => p.length));
+    expect([...lengths]).toEqual([10]);
+    expect(probe.parity).toBe("equal");
   });
 });

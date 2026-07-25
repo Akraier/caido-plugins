@@ -7,7 +7,7 @@
  *
  * | Arm | Payload | Vetoes the witness when the control behaves like the BREAK arm |
  * |-----|---------|----------------------------------------------------------------|
- * | Z0  | inert, same length | the baseline itself drifted, so the "difference" is time, not payload |
+ * | Z0  | inert, same length | an inert value reproduces it, so it is not about the payload's syntax |
  * | Dz  | same length, no special characters | the app reacts to payload LENGTH or position, not syntax |
  * | Ds  | same length, same non-special profile, different punctuation | the app reacts to punctuation generally, not to THIS punctuation |
  * | Bd  | the break with its specials double-percent-encoded | something byte-level is reacting, typically a firewall |
@@ -104,7 +104,8 @@ export function buildControlArms(breakPayload: string, random: () => number): Co
     {
       name: "Z0",
       payload: buildZ0(breakPayload, random),
-      explains: "the baseline drifted during the measurement",
+      explains:
+        "an inert value of the same length reproduces the effect, so it is not about the payload's syntax",
     },
     {
       name: "Dz",
@@ -197,32 +198,30 @@ export interface VetoResult {
     readonly by: ControlName;
     readonly explains: string;
   }[];
-  /** Set when Z0 drifted, which invalidates the whole measurement rather than one witness. */
-  readonly drifted: boolean;
 }
 
 /**
  * Apply the control vetoes.
  *
- * Order matters. Z0 is checked first and is fatal to the measurement, not to a single witness: if
- * the inert baseline no longer looks like the escape arm, the reference has moved and nothing
- * measured against it can be trusted. The remaining arms remove witnesses individually.
+ * Every arm, Z0 included, works the same way: it vetoes a witness only if BOTH replicates reproduce
+ * the break-side behaviour. A witness survives when no control could account for it.
+ *
+ * Z0 was originally treated differently -- as a drift detector that had to land on the escape side
+ * for every witness, and fatal to the whole measurement otherwise. That was wrong, and a real ERB
+ * template-injection target exposed it. Escape payloads are semantically meaningful by design: the
+ * escape arm of the ERB evaluation probe renders `Hello 7`, which is a completely different page
+ * from an inert echo. Z0 therefore differed from escape for entirely legitimate reasons and vetoed
+ * every genuine finding on that target.
+ *
+ * Detecting true baseline drift needs a reference captured with an inert value BEFORE probing, which
+ * is the calibration tier described in the specification and not yet implemented. Asserting drift
+ * against the escape arm is not a substitute for it, so that check is gone rather than approximated.
  */
 export function applyControlVetoes(
   witnesses: readonly FeatureDiff[],
   observations: readonly { readonly arm: ControlArm; readonly sides: readonly Side[][] }[],
 ): VetoResult {
   // observations[i].sides[w] is the per-replicate sides for witness w under arm i.
-  const z0 = observations.find((o) => o.arm.name === "Z0");
-  if (z0 !== undefined) {
-    const anyDrift = witnesses.some((_, w) =>
-      (z0.sides[w] ?? []).some((side) => side !== "escape"),
-    );
-    if (anyDrift) {
-      return { survivors: [], vetoed: [], drifted: true };
-    }
-  }
-
   const survivors: FeatureDiff[] = [];
   const vetoed: {
     witness: FeatureDiff;
@@ -235,7 +234,6 @@ export function applyControlVetoes(
     let killedBy: ControlArm | undefined;
 
     for (const observation of observations) {
-      if (observation.arm.name === "Z0") continue;
       const sides = observation.sides[w] ?? [];
       if (sides.length === 0) continue;
       // Unanimity: every replicate must land on the break side to veto.
@@ -249,7 +247,7 @@ export function applyControlVetoes(
     else vetoed.push({ witness, by: killedBy.name, explains: killedBy.explains });
   }
 
-  return { survivors, vetoed, drifted: false };
+  return { survivors, vetoed };
 }
 
 export type Confidence = "firm" | "probable" | "tentative";

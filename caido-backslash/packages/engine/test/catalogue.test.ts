@@ -15,6 +15,8 @@ import {
   corruptMagicValue,
 } from "../src/probes/catalogue.ts";
 import { equalisePair, padNumericLiteral, padWithFiller } from "../src/probes/pad.ts";
+import { QUERY_VALUE_CODEC } from "../src/request/codecs.ts";
+import { asciiBytes as bytes } from "../src/request/template.ts";
 import type { ProbePair } from "../src/probes/types.ts";
 
 function allEscapeMembers(pair: ProbePair): string[] {
@@ -347,5 +349,62 @@ describe("padding primitives", () => {
     expect(result.equal).toBe(false);
     expect(result.breakPayload).toBe("\\");
     expect(result.escapePayload).toBe("\\\\");
+  });
+});
+
+describe("percent-significant payloads reach the server intact", () => {
+  const asText = (u: Uint8Array): string => {
+    let out = "";
+    for (const b of u) out += String.fromCharCode(b);
+    return out;
+  };
+
+  function encodeWith(pair: ProbePair, payload: string): string {
+    const result = QUERY_VALUE_CODEC.encode(bytes(payload), pair.wireForm ?? "literal");
+    if (!result.ok) throw new Error(`refused: ${result.reason}`);
+    return asText(result.bytes);
+  }
+
+  it("keeps ERB delimiters raw on a query surface", () => {
+    // The bug this guards: with % encoded, "<%z" went out as "<%25z" and "z%>" as "z%25>", so the
+    // syntax under test never reached the template engine and a plain ERB injection was invisible.
+    const erb = ALL_STATIC_PROBES.find((p) => p.id === "interp.erb")!;
+    expect(encodeWith(erb, "<%z")).toBe("<%z");
+    expect(encodeWith(erb, "z%>")).toBe("z%>");
+  });
+
+  it("keeps the ERB evaluation probe intact apart from the space", () => {
+    const evalProbe = ALL_STATIC_PROBES.find((p) => p.id === "interp.erb-eval")!;
+    // Space still has to be encoded: it would truncate the parameter otherwise.
+    expect(encodeWith(evalProbe, "<%= 7/0 %>")).toBe("<%=%207/0%20%>");
+    expect(encodeWith(evalProbe, "<%= 007 %>")).toBe("<%=%20007%20%>");
+  });
+
+  it("keeps the Struts/OGNL percent-brace form raw", () => {
+    // interp.percent shipped broken: %{{41 was encoded to %25{{41 and could never fire.
+    const percent = ALL_STATIC_PROBES.find((p) => p.id === "interp.percent")!;
+    expect(encodeWith(percent, "%{{41")).toBe("%{{41");
+    expect(encodeWith(percent, "%}}")).toBe("%}}");
+  });
+
+  it("still encodes a literal percent for probes that do not declare it significant", () => {
+    const apostrophe = ALL_STATIC_PROBES.find((p) => p.id === "delim.apostrophe")!;
+    expect(apostrophe.wireForm).toBeUndefined();
+    expect(encodeWith(apostrophe, "100%")).toBe("100%25");
+  });
+
+  it("never exempts a byte that would break the container", () => {
+    // Only % may be exempted. These would split the parameter or the request line.
+    const erb = ALL_STATIC_PROBES.find((p) => p.id === "interp.erb")!;
+    expect(encodeWith(erb, "a&b")).toBe("a%26b");
+    expect(encodeWith(erb, "a b")).toBe("a%20b");
+    expect(encodeWith(erb, "a#b")).toBe("a%23b");
+    expect(encodeWith(erb, "a\r\nb")).toBe("a%0D%0Ab");
+  });
+
+  it("covers the ERB/EJS/JSP/ASP delimiter family that the original omitted entirely", () => {
+    const ids = ALL_STATIC_PROBES.map((p) => p.id);
+    expect(ids).toContain("interp.erb");
+    expect(ids).toContain("interp.erb-eval");
   });
 });

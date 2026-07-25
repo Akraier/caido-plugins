@@ -158,7 +158,6 @@ describe("veto application", () => {
       observation("Ds", [["escape", "escape"], ["escape", "escape"]]),
       observation("Bd", [["escape", "escape"], ["escape", "escape"]]),
     ]);
-    expect(result.drifted).toBe(false);
     expect(result.survivors).toHaveLength(2);
     expect(result.vetoed).toHaveLength(0);
   });
@@ -184,23 +183,33 @@ describe("veto application", () => {
     expect(result.vetoed).toHaveLength(0);
   });
 
-  it("treats baseline drift as fatal to the measurement, not to one witness", () => {
-    // If the inert baseline no longer resembles the escape arm, the reference has moved and nothing
-    // measured against it can be trusted.
+  it("vetoes only the witness an inert value reproduced, not the whole measurement", () => {
+    // Z0 is a uniform veto arm. An earlier version treated it as a fatal drift detector that had to
+    // land on the escape side for EVERY witness, which vetoed every genuine finding on any target
+    // whose escape payload does something observable -- a real ERB template-injection target proved
+    // it, since its escape arm renders a different page from an inert echo.
     const result = applyControlVetoes(witnesses, [
       observation("Z0", [["break", "break"], ["escape", "escape"]]),
       observation("Dz", [["escape", "escape"], ["escape", "escape"]]),
     ]);
-    expect(result.drifted).toBe(true);
-    expect(result.survivors).toHaveLength(0);
+    expect(result.survivors.map((w) => w.name)).toEqual(["kw:error"]);
+    expect(result.vetoed).toHaveLength(1);
+    expect(result.vetoed[0]!.by).toBe("Z0");
   });
 
-  it("counts a single drifting replicate as drift", () => {
-    // Z0 is the reference; it must be unanimous in the other direction.
+  it("keeps a witness when the inert value did not reproduce it", () => {
     const result = applyControlVetoes(witnesses, [
-      observation("Z0", [["escape", "neither"], ["escape", "escape"]]),
+      observation("Z0", [["neither", "escape"], ["neither", "neither"]]),
     ]);
-    expect(result.drifted).toBe(true);
+    expect(result.survivors).toHaveLength(2);
+  });
+
+  it("does not let a single Z0 replicate veto, same as every other arm", () => {
+    const result = applyControlVetoes(witnesses, [
+      observation("Z0", [["break", "escape"], ["escape", "escape"]]),
+    ]);
+    expect(result.survivors).toHaveLength(2);
+    expect(result.vetoed).toHaveLength(0);
   });
 
   it("reports which arm killed each witness, so the operator sees why", () => {
@@ -217,7 +226,6 @@ describe("veto application", () => {
   it("works with no controls observed at all", () => {
     const result = applyControlVetoes(witnesses, []);
     expect(result.survivors).toHaveLength(2);
-    expect(result.drifted).toBe(false);
   });
 });
 

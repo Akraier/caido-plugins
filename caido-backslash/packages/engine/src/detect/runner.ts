@@ -118,6 +118,7 @@ function randomToken(length: number, random: RandomSource): string {
 function makeArmBuilder(
   options: SuiteOptions,
   slot: Slot,
+  wireForm: "literal" | "literal-raw-percent" | "pre-encoded",
 ): (payload: string, canary: Canary) => EngineRequest {
   const { template, target, random } = options;
   return (payload, canary) => {
@@ -126,7 +127,7 @@ function makeArmBuilder(
         ? `${slot.baseValue}${canary.left}${payload}`
         : `${slot.baseValue}${canary.left}${payload}${canary.right}`;
 
-    const encoded = slot.codec.encode(asciiBytes(framed), "literal");
+    const encoded = slot.codec.encode(asciiBytes(framed), wireForm);
     if (!encoded.ok) {
       throw new PayloadNotDeliverable(`${slot.name}: ${encoded.detail}`);
     }
@@ -194,9 +195,12 @@ export async function runSuite(
 
   suite: for (let s = 0; s < options.slots.length; s++) {
     const slot = options.slots[s]!;
-    const build = makeArmBuilder(options, slot);
 
     for (const probe of options.probes) {
+      // Built per probe, not per slot: the encoder's treatment of the payload depends on what the
+      // probe declares about its own bytes.
+      const build = makeArmBuilder(options, slot, probe.wireForm ?? "literal");
+
       if (options.cancelled?.() === true) {
         stopReason = "cancelled";
         break suite;
@@ -371,15 +375,6 @@ export async function runSuite(
       }
 
       const veto = applyControlVetoes(live, observations);
-      if (veto.drifted) {
-        note({
-          probeId: probe.id,
-          slotName: slot.name,
-          kind: "drift",
-          detail: "the inert baseline drifted during attribution, so the reference moved",
-        });
-        continue;
-      }
       if (veto.survivors.length === 0) {
         note({
           probeId: probe.id,

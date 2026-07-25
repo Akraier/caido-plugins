@@ -56,6 +56,47 @@ const server = createServer((req, res) => {
       );
       return;
 
+    case "erb": {
+      // A minimal ERB-like template engine: the value is interpolated into a template and rendered.
+      // Unbalanced tags raise a parse error; a well-formed expression is evaluated.
+      const opens = (payload.match(/<%/g) ?? []).length;
+      const closes = (payload.match(/%>/g) ?? []).length;
+
+      if (opens > closes) {
+        send(
+          500,
+          `<html><body><div>SyntaxError: embedded document meets end of file ` +
+            `(unterminated ERB tag)</div></body></html>`,
+        );
+        return;
+      }
+
+      const expression = /<%=\s*([^%]*?)\s*%>/.exec(payload);
+      if (expression !== null) {
+        const source = expression[1] ?? "";
+        // Only arithmetic, and division by zero raises exactly as Ruby would.
+        if (/^[0-9+\-*/() ]+$/.test(source)) {
+          if (/\/\s*0+(?![1-9])/.test(source)) {
+            send(500, "<html><body><div>ZeroDivisionError: divided by 0</div></body></html>");
+            return;
+          }
+          let rendered: string;
+          try {
+            rendered = String(Function(`"use strict";return (${source})`)());
+          } catch {
+            send(500, "<html><body><div>SyntaxError in ERB expression</div></body></html>");
+            return;
+          }
+          send(200, `<html><body><p>Hello ${rendered}</p><div>3 results</div></body></html>`);
+          return;
+        }
+      }
+
+      // Anything else, including a stray close tag, is inert literal text.
+      send(200, `<html><body>${echo}<div>3 results</div></body></html>`);
+      return;
+    }
+
     case "vulnerable":
     default:
       if (unterminated) {

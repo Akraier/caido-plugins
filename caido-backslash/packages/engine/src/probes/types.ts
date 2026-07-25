@@ -88,6 +88,14 @@ export interface ProbePair {
    */
   readonly weight: number;
 
+  /**
+   * How the payload's own bytes should be read by the per-surface encoder.
+   *
+   * Defaults to plain literal. Set `literal-raw-percent` when the syntax under test contains a
+   * percent sign, and `pre-encoded` when the catalogue already wrote the payload in wire form.
+   */
+  readonly wireForm?: "literal" | "literal-raw-percent" | "pre-encoded";
+
   /** Why this pair exists, or a defect corrected while porting it. */
   readonly notes?: string;
 }

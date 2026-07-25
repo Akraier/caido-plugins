@@ -139,6 +139,15 @@ pipeline end to end:
   coarser excision.
 - **`echoTransformBits` cannot be a differential witness.** It describes what the server did to the
   payload, and the two arms send different payloads, so it differs by construction.
+- **The interpolation family had no ERB or EJS probe.** The original tests `{{`, `${` and `%{` only,
+  so a plain `<% %>` template injection was invisible. Added, along with an evaluation-confirming
+  pair that distinguishes a parsed delimiter from an executed one.
+- **Percent signs were encoded even where they are the syntax under test.** `<%= 7*7 %>` left as
+  `<%25=%207*7%20%25>`, and the shipped Struts/OGNL `%{}` probe could never have fired on a query
+  surface. Probes now declare when a raw percent is significant.
+- **The `Z0` control arm was a fatal drift check compared against the escape arm.** Escape payloads
+  are meaningful by design, so on any target where the escape does something observable `Z0`
+  legitimately differed and vetoed every genuine finding. It is now a uniform veto arm.
 
 ## Licence and attribution
 

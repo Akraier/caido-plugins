@@ -239,6 +239,44 @@ export const INTERPOLATION_PROBES: readonly ProbePair[] = [
     parity: "pad-filler",
     anchor: true,
     weight: 5,
+    wireForm: "literal-raw-percent",
+    notes:
+      "The percent sign is the syntax here, so it must arrive raw. Without this the encoder turned " +
+      "%{{ into %25{{ and the probe could never fire on a query or form surface.",
+  },
+  {
+    // ERB, EJS, JSP and ASP all share the <% %> delimiter, so one pair covers the family. The
+    // original catalogue had no probe for it at all: its interpolation family is {{, ${ and %{ only,
+    // which is why a plain ERB template injection went undetected.
+    id: "interp.erb",
+    name: "Interpolation: ERB/EJS scriptlet",
+    stage: "interpolation",
+    // An unbalanced OPEN leaves the template parser scanning for a close tag and raises; a stray
+    // CLOSE is ordinarily inert literal text. Same shape as the curly-brace probe.
+    breaks: ["<%z", "z<%z"],
+    escapeSets: [["z%>"], ["%>z"], ["z%>z"]],
+    mode: "append",
+    parity: "pad-filler",
+    anchor: true,
+    weight: 5,
+    wireForm: "literal-raw-percent",
+  },
+  {
+    // Confirms the delimiter is not merely parsed but EVALUATED, which is the difference between a
+    // template that echoes your text and one that runs it. Both arms are ten bytes.
+    id: "interp.erb-eval",
+    name: "Interpolation: ERB expression evaluated",
+    stage: "interpolation",
+    breaks: ["<%= 7/0 %>"],
+    escapeSets: [["<%= 007 %>"]],
+    mode: "append",
+    parity: "equal",
+    anchor: true,
+    weight: 8,
+    wireForm: "literal-raw-percent",
+    notes:
+      "Division by zero raises in Ruby and JavaScript; a padded literal does not. Leading zeros keep " +
+      "the value at 7 in both languages while making the two arms the same length.",
   },
 ];
 

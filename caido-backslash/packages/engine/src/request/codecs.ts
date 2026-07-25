@@ -42,7 +42,23 @@ export type EncodeResult =
  * Encoding those again produces `%253c...`, which is a verified defect of the library alternative
  * and silently destroys the family. Pre-encoded payloads pass through untouched.
  */
-export type WireForm = "literal" | "pre-encoded";
+export type WireForm =
+  /** The payload is the exact character sequence the interpreter should receive. */
+  | "literal"
+  /**
+   * Literal, but `%` is syntactically significant and must arrive raw.
+   *
+   * Needed by any probe whose delimiter contains a percent sign: ERB and EJS `<% %>`, and the
+   * Struts/OGNL `%{}` form. Encoding it turns `%>` into `%25>` and `%{{` into `%25{{`, which
+   * destroys the very syntax under test. Only `%` can be exempted this way; `&`, `#`, space, CR, LF
+   * and NUL would break the container itself and are always encoded.
+   */
+  | "literal-raw-percent"
+  /**
+   * Already in wire form. The parameter-pollution family's payloads look like
+   * `%3c%61%60%27%22%24%7b%7b%5c`; encoding them again yields `%253c` and destroys the family.
+   */
+  | "pre-encoded";
 
 const NUL = 0x00;
 const LF = 0x0a;
@@ -74,6 +90,9 @@ function percentEncode(payload: Uint8Array, flags: Uint8Array): Uint8Array {
   }
   return out;
 }
+
+/** Percent, split out so it can be exempted per probe without duplicating each surface's table. */
+const PERCENT = 0x25;
 
 /**
  * Query string values.
@@ -110,10 +129,21 @@ export interface Codec {
   encode(payload: Uint8Array, wireForm: WireForm): EncodeResult;
 }
 
+/** A copy of `flags` with the percent byte left alone. */
+function withRawPercent(flags: Uint8Array): Uint8Array {
+  const copy = Uint8Array.from(flags);
+  copy[PERCENT] = 0;
+  return copy;
+}
+
 function percentCodec(name: string, flags: Uint8Array): Codec {
+  const rawPercentFlags = withRawPercent(flags);
   return {
     name,
     encode(payload, wireForm) {
+      if (wireForm === "literal-raw-percent") {
+        return { ok: true, bytes: percentEncode(payload, rawPercentFlags) };
+      }
       if (wireForm === "pre-encoded") {
         // Already wire-form. Still refuse raw control bytes, which no amount of prior encoding
         // could have intended.
