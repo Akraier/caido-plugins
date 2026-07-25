@@ -46,8 +46,17 @@ type BackendSDK = SDK<API, Events>;
 const PROBE_LIMIT: Record<string, number> = { low: 4, medium: 12, high: ALL_STATIC_PROBES.length };
 const SLOT_LIMIT: Record<string, number> = { low: 3, medium: 8, high: 24 };
 
+/**
+ * Live scan state.
+ *
+ * `progress` is mutable and this object is mutated in place rather than replaced in the map. An
+ * earlier version did `scans.set(scanId, { ...active, progress: next })` on every progress tick,
+ * which put a shallow COPY in the map while runScan's closure still held the original. The effects
+ * were silent and nasty: cancelScan flipped `cancelled` on the copy so the running scan never saw
+ * it, and runScan assigned `result` to the original so getResult always returned null.
+ */
 interface ActiveScan {
-  readonly progress: ScanProgress;
+  progress: ScanProgress;
   readonly transport: ProbeTransport;
   cancelled: boolean;
   result?: ScanResult;
@@ -208,7 +217,8 @@ async function runScan(sdk: BackendSDK, scanId: string, input: ScanRequestInput)
             sends: progress.sends,
             findings: findings.length,
           };
-          scans.set(scanId, { ...active, progress: next });
+          // Mutate in place: replacing the map entry would detach it from this closure.
+          active.progress = next;
           sdk.api.send(EVENT_PROGRESS, next);
         },
         onFinding: (finding) => {
