@@ -1,6 +1,6 @@
 {
   "name": "@caido-backslash/cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Run the backslash engine against a target without Caido. Byte-exact sending over raw sockets.",
   "type": "module",
   "bin": {
