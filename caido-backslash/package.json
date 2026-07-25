@@ -1,6 +1,6 @@
 {
   "name": "caido-backslash",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "Backslash-powered scanning for Caido: probe-pair detection of unknown server-side injection classes",
   "type": "module",

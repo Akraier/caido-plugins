@@ -186,13 +186,25 @@ export async function runSuite(
     events.onDiagnostic?.(diagnostic);
   };
 
-  for (let s = 0; s < options.slots.length; s++) {
+  // Labelled so a stop exits the WHOLE suite. An unlabelled break left the outer slot loop running,
+  // so cancelling only skipped the rest of the current slot and the scan then re-entered on the next
+  // one. Traffic did stop, because a halted transport short-circuits every send, but the run spun
+  // through every remaining slot and probe emitting diagnostics instead of finishing.
+  let stopReason: "cancelled" | "halted" | undefined;
+
+  suite: for (let s = 0; s < options.slots.length; s++) {
     const slot = options.slots[s]!;
     const build = makeArmBuilder(options, slot);
 
     for (const probe of options.probes) {
-      if (options.cancelled?.() === true) break;
-      if (transport.stats().state === "halted") break;
+      if (options.cancelled?.() === true) {
+        stopReason = "cancelled";
+        break suite;
+      }
+      if (transport.stats().state === "halted") {
+        stopReason = "halted";
+        break suite;
+      }
 
       probesDone += 1;
       events.onProgress?.({
@@ -411,11 +423,29 @@ export async function runSuite(
     }
   }
 
+  // One diagnostic for the stop, rather than one per probe that never ran.
+  if (stopReason !== undefined) {
+    const remaining = probesTotal - probesDone;
+    note({
+      probeId: "-",
+      slotName: "-",
+      kind: "inconclusive",
+      detail:
+        stopReason === "cancelled"
+          ? `stopped by the operator with ${remaining} probe(s) not run`
+          : `transport halted with ${remaining} probe(s) not run: the target stopped answering usefully`,
+    });
+  }
+
   const stats = transport.stats();
   return {
     findings,
     diagnostics,
     sends: stats.sent,
-    ...(stats.haltReason === undefined ? {} : { haltReason: stats.haltReason.kind }),
+    ...(stats.haltReason !== undefined
+      ? { haltReason: stats.haltReason.kind }
+      : stopReason === "cancelled"
+        ? { haltReason: "cancelled" }
+        : {}),
   };
 }

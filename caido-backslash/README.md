@@ -37,8 +37,10 @@ pnpm run build          # -> dist/plugin.zip
 ```
 
 Then in Caido: Plugins -> Install -> pick `dist/plugin.zip`. Right-click any request in HTTP History
-or the request pane and choose **Backslash: scan this request**; results stream into the Backslash
-page in the sidebar.
+or the request pane and choose **Backslash: scan this request**. That opens a tab showing the target
+and the settings; nothing is sent until you press Start. Each scan gets its own tab, so concurrent
+scans do not interfere, and each has a **Stop** button that halts it immediately — no further
+requests are sent, and the partial result is kept rather than discarded.
 
 Findings are written to Caido's own Findings page as well. Core `FindingSpec` has no severity field,
 so confidence is carried in the description text — the community scanner works around the same gap

@@ -71,7 +71,7 @@ interface Target {
   readonly isTls: boolean;
 }
 
-type TabState = "pending" | "running" | "finished" | "halted" | "error";
+type TabState = "pending" | "running" | "stopping" | "stopped" | "finished" | "halted" | "error";
 
 interface ScanTab {
   readonly key: string;
@@ -85,6 +85,7 @@ interface ScanTab {
   readonly findingsBox: HTMLDivElement;
   readonly logBox: HTMLDivElement;
   readonly viewToggle: HTMLDivElement;
+  readonly stopButton: HTMLButtonElement;
   findingCount: number;
   logShown: number;
   logTotal: number;
@@ -244,11 +245,15 @@ export function init(sdk: App): void {
         ? "draft"
         : tab.state === "running"
           ? "running"
-          : tab.state === "halted"
-            ? "halted"
-            : tab.state === "error"
-              ? "error"
-              : `${tab.findingCount} found`;
+          : tab.state === "stopping"
+            ? "stopping"
+            : tab.state === "stopped"
+              ? "stopped"
+              : tab.state === "halted"
+                ? "halted"
+                : tab.state === "error"
+                  ? "error"
+                  : `${tab.findingCount} found`;
     return `${tab.target.path.slice(0, 24)} [${marker}]`;
   }
 
@@ -440,6 +445,7 @@ export function init(sdk: App): void {
     tab.statusLine.style.display = "block";
     tab.statusLine.textContent = `${tab.scanId} starting`;
     tab.viewToggle.style.display = "flex";
+    tab.stopButton.style.display = "inline-block";
     tab.findingsBox.style.display = "block";
   }
 
@@ -454,11 +460,20 @@ export function init(sdk: App): void {
     const closeButton = el("span", " x", "margin-left:6px;opacity:0.6;");
 
     const pane = el("div", undefined, "display:none;");
-    const statusLine = el("div", undefined, `${MONO}margin-bottom:10px;opacity:0.85;display:none;`);
+    const statusRow = el(
+      "div",
+      undefined,
+      "display:flex;gap:10px;align-items:center;margin-bottom:10px;",
+    );
+    const statusLine = el("div", undefined, `${MONO}opacity:0.85;display:none;flex:1;`);
+    const stopButton = el("button", "Stop");
+    stopButton.style.cssText =
+      "display:none;padding:3px 12px;border-radius:4px;border:1px solid #7f1d1d;background:#450a0a;color:#fecaca;cursor:pointer;font-size:11px;font-weight:600;";
+    statusRow.append(statusLine, stopButton);
     const viewToggle = el("div", undefined, "display:none;gap:6px;margin-bottom:8px;");
     const findingsBox = el("div", undefined, "display:none;");
     const logBox = el("div", undefined, `display:none;${MONO}font-size:11px;line-height:1.45;`);
-    pane.append(statusLine, viewToggle, findingsBox, logBox);
+    pane.append(statusRow, viewToggle, findingsBox, logBox);
 
     const tab: ScanTab = {
       key: `tab-${tabCounter}`,
@@ -471,6 +486,7 @@ export function init(sdk: App): void {
       findingsBox,
       logBox,
       viewToggle,
+      stopButton,
       findingCount: 0,
       logShown: 0,
       logTotal: 0,
@@ -493,6 +509,18 @@ export function init(sdk: App): void {
     showLog.onclick = () => setView("requests");
     setView("findings");
     viewToggle.append(showFindings, showLog);
+
+    stopButton.onclick = () => {
+      if (tab.scanId === undefined) return;
+      // Optimistic state change: the operator pressed Stop and must see it took effect immediately,
+      // even though the run finishes asynchronously once the transport stops accepting work.
+      tab.state = "stopping";
+      refreshTabButton(tab);
+      stopButton.disabled = true;
+      stopButton.textContent = "stopping...";
+      tab.statusLine.textContent = `${tab.scanId} stopping — no further requests will be sent`;
+      void sdk.backend.cancelScan(tab.scanId);
+    };
 
     tabButton.onclick = () => select(tab);
     closeButton.onclick = (event) => {
@@ -560,12 +588,25 @@ export function init(sdk: App): void {
   sdk.backend.onEvent(EVENT_DONE, (result: ScanResult) => {
     const tab = byScanId.get(result.scanId);
     if (tab === undefined) return;
-    tab.state = result.haltReason === undefined ? "finished" : "halted";
+    tab.state =
+      result.haltReason === undefined
+        ? "finished"
+        : result.haltReason === "cancelled"
+          ? "stopped"
+          : "halted";
     refreshTabButton(tab);
+    tab.stopButton.style.display = "none";
 
-    const halted = result.haltReason === undefined ? "" : `  HALTED (${result.haltReason})`;
+    // An operator stop and a target that stopped answering are different outcomes and must not read
+    // the same: one is a decision, the other is a warning about the measurement.
+    const suffix =
+      result.haltReason === undefined
+        ? ""
+        : result.haltReason === "cancelled"
+          ? "  STOPPED by operator"
+          : `  HALTED (${result.haltReason})`;
     tab.statusLine.textContent =
-      `${result.scanId} finished  sends ${result.sends}  findings ${result.findings.length}${halted}`;
+      `${result.scanId} ${tab.state}  sends ${result.sends}  findings ${result.findings.length}${suffix}`;
 
     if (tab.logTotal > tab.logShown) {
       tab.logBox.prepend(
@@ -588,15 +629,13 @@ export function init(sdk: App): void {
 
     if (result.findings.length === 0) {
       const unmeasured = result.diagnostics.filter((d) => d.kind !== "boring");
-      tab.findingsBox.append(
-        el(
-          "div",
-          unmeasured.length === 0
+      const message =
+        tab.state === "stopped"
+          ? "Stopped before finishing. Nothing found so far, which says nothing about what was not reached."
+          : unmeasured.length === 0
             ? "No anomalies. Every probe was measured and found nothing."
-            : `No findings, but ${unmeasured.length} probe(s) could not be measured cleanly. A blinded measurement is not a clean result — see the backend log.`,
-          `${MONO}opacity:0.8;`,
-        ),
-      );
+            : `No findings, but ${unmeasured.length} probe(s) could not be measured cleanly. A blinded measurement is not a clean result — see the Requests tab.`;
+      tab.findingsBox.append(el("div", message, `${MONO}opacity:0.8;`));
     }
   });
 
