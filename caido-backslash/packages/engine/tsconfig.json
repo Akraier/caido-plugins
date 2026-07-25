@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    // ES2023 matches what Caido's QuickJS backend supports. Do not raise this without
+    // checking the runtime: the backend is not Node and has no transpile step at load time.
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    // Relative imports carry explicit .ts extensions so the same source runs unbundled under
+    // Node type-stripping (the CLI) and bundles for the plugin without a resolution shim.
+    "allowImportingTsExtensions": true,
+    "types": []
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}

@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    // The CLI runs on Node, unlike the engine, so Node types and libs are allowed HERE only.
+    // The engine deliberately compiles against ES2023 with no ambient types so nothing can slip in
+    // that Caido's QuickJS backend does not provide.
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    // Relative imports carry explicit .ts extensions so the same source runs unbundled under
+    // Node type-stripping (the CLI) and bundles for the plugin without a resolution shim.
+    "allowImportingTsExtensions": true,
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"]
+}

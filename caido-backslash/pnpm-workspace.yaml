@@ -1,0 +1,6 @@
+packages:
+  - "packages/*"
+# esbuild ships a platform-specific native binary and needs its install script to run.
+# vitest depends on it; without this, test runs fail at startup under pnpm 11.
+allowBuilds:
+  esbuild: true

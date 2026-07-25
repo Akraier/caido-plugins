@@ -1,0 +1,245 @@
+{
+  "functionTriples": [
+    {
+      "language": "Ruby injection",
+      "escape_valid": "1.to_s",
+      "breaks_invalid": [
+        "1.to_z",
+        "1.tz_s"
+      ],
+      "lengths": [
+        6
+      ],
+      "lengthParity": true
+    },
+    {
+      "language": "Python injection",
+      "escape_valid": "unichr(49)",
+      "breaks_invalid": [
+        "unichrr(49)",
+        "unichn(97)"
+      ],
+      "lengths": [
+        10,
+        11
+      ],
+      "lengthParity": false
+    },
+    {
+      "language": "Ruby injection",
+      "escape_valid": "1.abs",
+      "breaks_invalid": [
+        "1.abz",
+        "1.abf"
+      ],
+      "lengths": [
+        5
+      ],
+      "lengthParity": true
+    },
+    {
+      "language": "JavaScript injection",
+      "escape_valid": "isFinite(1)",
+      "breaks_invalid": [
+        "isFinitd(1)",
+        "isFinitee(1)"
+      ],
+      "lengths": [
+        11,
+        12
+      ],
+      "lengthParity": false
+    },
+    {
+      "language": "Shell injection",
+      "escape_valid": "$((10/10))",
+      "breaks_invalid": [
+        "$((10/00))",
+        "$((1/0))"
+      ],
+      "lengths": [
+        8,
+        10
+      ],
+      "lengthParity": false
+    },
+    {
+      "language": "Basic function injection",
+      "escape_valid": "abs(1)",
+      "breaks_invalid": [
+        "abz(1)",
+        "abf(1)"
+      ],
+      "lengths": [
+        6
+      ],
+      "lengthParity": true
+    },
+    {
+      "language": "Python injection",
+      "escape_valid": "int(unichr(49))",
+      "breaks_invalid": [
+        "int(unichrr(49))",
+        "int(unichz(49))"
+      ],
+      "lengths": [
+        15,
+        16
+      ],
+      "lengthParity": false
+    },
+    {
+      "language": "MySQL injection",
+      "escape_valid": "power(unix_timestamp(),0)",
+      "breaks_invalid": [
+        "power(unix_timestampp(),0)",
+        "power(unix_timestanp(),0)"
+      ],
+      "lengths": [
+        25,
+        26
+      ],
+      "lengthParity": false
+    },
+    {
+      "language": "Oracle SQL injection",
+      "escape_valid": "to_number(1)",
+      "breaks_invalid": [
+        "to_numberr(1)",
+        "to_numbez(1)"
+      ],
+      "lengths": [
+        12,
+        13
+      ],
+      "lengthParity": false
+    },
+    {
+      "language": "SQL Server injection",
+      "escape_valid": "power(current_request_id(),0)",
+      "breaks_invalid": [
+        "power(current_request_ids(),0)",
+        "power(current_request_ic(),0)"
+      ],
+      "lengths": [
+        29,
+        30
+      ],
+      "lengthParity": false
+    },
+    {
+      "language": "PostgreSQL injection",
+      "escape_valid": "power(inet_server_port(),0)",
+      "breaks_invalid": [
+        "power(inet_server_por(),0)",
+        "power(inet_server_pont(),0)"
+      ],
+      "lengths": [
+        26,
+        27
+      ],
+      "lengthParity": false
+    },
+    {
+      "language": "SQLite injection",
+      "escape_valid": "min(sqlite_version(),1)",
+      "breaks_invalid": [
+        "min(sqlite_versionn(),1)",
+        "min(sqlite_versipn(),1)"
+      ],
+      "lengths": [
+        23,
+        24
+      ],
+      "lengthParity": false
+    },
+    {
+      "language": "PHP injection",
+      "escape_valid": "pow((int)phpversion(),0)",
+      "breaks_invalid": [
+        "pow((int)phpversionn(),0)",
+        "pow((int)phpversiom(),0)"
+      ],
+      "lengths": [
+        24,
+        25
+      ],
+      "lengthParity": false
+    },
+    {
+      "language": "Perl injection",
+      "escape_valid": "(getppid()**0)",
+      "breaks_invalid": [
+        "(getppidd()**0)",
+        "(getppif()**0)"
+      ],
+      "lengths": [
+        14,
+        15
+      ],
+      "lengthParity": false
+    }
+  ],
+  "functionTripleNotes": {
+    "gateProbeName": "Basic function injection",
+    "gatePositionInList": 5,
+    "comment": "The cheap gate that aborts the cascade is evaluated only when its own entry is reached, so every earlier language is probed first."
+  },
+  "decodeBasedPayloads": {
+    "payloads": [
+      "101",
+      "x41",
+      "u0041",
+      "0",
+      "1",
+      "x0"
+    ],
+    "count": 6,
+    "distinctCount": 6,
+    "duplicates": []
+  },
+  "payloads": {
+    "payloads": [
+      "'",
+      "\"",
+      "{",
+      "}",
+      "(",
+      ")",
+      "[",
+      "]",
+      "$",
+      "`",
+      "/",
+      "@",
+      "#",
+      ";",
+      "%",
+      "&",
+      "|",
+      ";",
+      "^",
+      "?"
+    ],
+    "count": 20,
+    "distinctCount": 19,
+    "duplicates": [
+      ";"
+    ]
+  },
+  "magicValues": {
+    "raw": "undefined,null,empty,none,COM1,c!C123449477,aA1537368460!",
+    "values": [
+      "undefined",
+      "null",
+      "empty",
+      "none",
+      "COM1",
+      "c!C123449477",
+      "aA1537368460!"
+    ],
+    "shortestLen": 4,
+    "corruptorNote": "The Java corruptor writes 'z' at index i%len for i in 0..3, so any value shorter than 4 chars yields duplicate corruptions, and an empty value (trailing comma in this user-editable setting) divides by zero.",
+    "wouldDuplicateCorruptions": []
+  }
+}

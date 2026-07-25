@@ -1,0 +1,70 @@
+caido-backslash
+Copyright 2026 Akraier
+
+This product includes work derived from Backslash Powered Scanner:
+
+    Copyright 2016 PortSwigger Web Security
+    Copyright 2016 James Kettle <albinowax@gmail.com>
+    https://github.com/portswigger/backslash-powered-scanner
+    Licensed under the Apache License, Version 2.0
+
+A copy of the Apache License, Version 2.0 is included as
+LICENSE-APACHE-2.0.txt.
+
+WHAT IS DERIVED
+---------------
+
+The probe catalogue in packages/engine/src/probes/catalogue.ts is derived from
+the payload definitions in DiffingScan.java and TransformationScan.java of the
+above work. The payload strings were extracted mechanically and decoded from
+their Java string literals rather than reimplemented; they are substantially
+the original author's work.
+
+The scripts that performed that extraction are in docs/analysis/, along with
+their output.
+
+WHAT IS NOT DERIVED
+-------------------
+
+Everything else is an independent implementation. In particular the detection
+engine, request layer, response featurisation, admission gate, throttling and
+attribution logic were designed from the published research rather than ported
+from the Java source, and share no code with it.
+
+SIGNIFICANT CHANGES TO THE DERIVED PORTION
+------------------------------------------
+
+Required by section 4(b) of the Apache License. The following changes were made
+to the extracted catalogue, each correcting a defect observed in the original:
+
+1. The cheap "Basic function injection" gate that aborts the language cascade
+   was moved from index 5 to index 0. In the original, Ruby, Python, JavaScript
+   and shell were each fully probed before the gate that would have skipped
+   them could fire.
+
+2. corruptMagicValue was rewritten. The original wrote a filler character at
+   index i modulo the value length for i in 0..3, which produced duplicate
+   corruptions for values shorter than four characters and divided by zero on
+   an empty value. An empty value is reachable from a trailing comma in a
+   user-editable setting.
+
+3. A duplicate ";" was removed from the transformation metacharacter list,
+   which cost one wasted probe round per parameter.
+
+4. The nginx alias-escape template no longer produces two identical escape
+   payloads for single-character parameter values.
+
+5. Each pair now declares whether its break and escape payloads can be made
+   equal length, and by which strategy. 23 of 42 pairs and 11 of 14 language
+   function triples had mismatched lengths in the original.
+
+6. Payloads that are already in wire form, such as the parameter-pollution
+   family, are marked as such so they are not percent-encoded a second time.
+
+7. Probes whose semantics require the payload to be last in the value are
+   marked end-anchored, because a trailing backslash is only an unterminated
+   escape if nothing follows it.
+
+The original catalogue, as extracted and before these changes, is preserved
+verbatim in docs/analysis/probe_catalogue_raw.json so the divergence is
+auditable.

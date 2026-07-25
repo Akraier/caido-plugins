@@ -1,0 +1,1463 @@
+{
+  "DiffingScan.java": [
+    {
+      "name": "entry[0]",
+      "var": "functionCall",
+      "line": 54,
+      "severity": "9",
+      "prefix": "APPEND",
+      "randomAnchor": false,
+      "useCacheBuster": false,
+      "requireConsistentEvidence": null,
+      "isTemplate": true,
+      "base": null,
+      "breaks": [],
+      "breakTemplates": [
+        "invalidCalls"
+      ],
+      "escapeSets": [
+        [
+          "prefix+entry[1]+suffix"
+        ]
+      ],
+      "breakLens": [],
+      "escapeLens": [],
+      "issues": []
+    },
+    {
+      "name": "Backend Parameter Injection",
+      "var": "backendParameterInjection",
+      "line": 85,
+      "severity": "2",
+      "prefix": "APPEND",
+      "randomAnchor": false,
+      "useCacheBuster": true,
+      "requireConsistentEvidence": null,
+      "isTemplate": false,
+      "base": null,
+      "breaks": [
+        "$zq=%3c%61%60%27%22%24%7b%7b%5c&zq%3d",
+        "|zqy=x%3c%61%60%27%22%24%7b%7b%5c",
+        "!zq=%3c%61%60%27%22%24%7b%7b%5c"
+      ],
+      "breakTemplates": [],
+      "escapeSets": [
+        [
+          "%26zqy=%3c%61%60%27%22%24%7b%7b%5c"
+        ],
+        [
+          "%26zq=x%3c%61%60%27%22%24%7b%7b%5c"
+        ]
+      ],
+      "breakLens": [
+        31,
+        33,
+        37
+      ],
+      "escapeLens": [
+        34
+      ],
+      "issues": [
+        "LENGTH_MISMATCH breaks=[31, 33, 37] escapes=[34]: if the value is reflected, body-length attributes differ for a boring reason"
+      ]
+    },
+    {
+      "name": "Basic fuzz",
+      "var": "multiFuzz",
+      "line": 122,
+      "severity": "0",
+      "prefix": "APPEND",
+      "randomAnchor": true,
+      "useCacheBuster": null,
+      "requireConsistentEvidence": null,
+      "isTemplate": false,
+      "base": null,
+      "breaks": [
+        "`z'z\"\\",
+        "\\z`z'z\"\\"
+      ],
+      "breakTemplates": [],
+      "escapeSets": [
+        [
+          "\\`z\\'z\\\"\\\\",
+          "\\`z''z\\\"\\\\"
+        ]
+      ],
+      "breakLens": [
+        6,
+        8
+      ],
+      "escapeLens": [
+        10
+      ],
+      "issues": [
+        "LENGTH_MISMATCH breaks=[6, 8] escapes=[10]: if the value is reflected, body-length attributes differ for a boring reason"
+      ]
+    },
+    {
+      "name": "Backslash",
+      "var": "trailer",
+      "line": 131,
+      "severity": "1",
+      "prefix": "APPEND",
+      "randomAnchor": true,
+      "useCacheBuster": null,
+      "requireConsistentEvidence": null,
+      "isTemplate": false,
+      "base": "\\",
+      "breaks": [
+        "\\\\\\",
+        "\\"
+      ],
+      "breakTemplates": [],
+      "escapeSets": [
+        [
+          "\\\\\\\\"
+        ],
+        [
+          "\\\\"
+        ]
+      ],
+      "breakLens": [
+        1,
+        3
+      ],
+      "escapeLens": [
+        2,
+        4
+      ],
+      "issues": [
+        "LENGTH_MISMATCH breaks=[1, 3] escapes=[2, 4]: if the value is reflected, body-length attributes differ for a boring reason"
+      ]
+    },
+    {
+      "name": "String - apostrophe",
+      "var": "apos",
+      "line": 135,
+      "severity": "3",
+      "prefix": "APPEND",
+      "randomAnchor": true,
+      "useCacheBuster": null,
+      "requireConsistentEvidence": null,
+      "isTemplate": false,
+      "base": "'",
+      "breaks": [
+        "z'z",
+        "\\zz'z",
+        "z/'z"
+      ],
+      "breakTemplates": [],
+      "escapeSets": [
+        [
+          "z\\'z",
+          "z''z"
+        ],
+        [
+          "z\\\\\\'z",
+          "z\\''z"
+        ]
+      ],
+      "breakLens": [
+        3,
+        4,
+        5
+      ],
+      "escapeLens": [
+        4,
+        5,
+        6
+      ],
+      "issues": [
+        "LENGTH_MISMATCH breaks=[3, 4, 5] escapes=[4, 5, 6]: if the value is reflected, body-length attributes differ for a boring reason"
+      ]
+    },
+    {
+      "name": "String - doublequoted",
+      "var": "quote",
+      "line": 140,
+      "severity": "3",
+      "prefix": "APPEND",
+      "randomAnchor": true,
+      "useCacheBuster": null,
+      "requireConsistentEvidence": null,
+      "isTemplate": false,
+      "base": "\"",
+      "breaks": [
+        "\"",
+        "\\zz\""
+      ],
+      "breakTemplates": [],
+      "escapeSets": [
+        [
+          "\\\""
+        ]
+      ],
+      "breakLens": [
+        1,
+        4
+      ],
+      "escapeLens": [
+        2
+      ],
+      "issues": [
+        "LENGTH_MISMATCH breaks=[1, 4] escapes=[2]: if the value is reflected, body-length attributes differ for a boring reason"
+      ]
+    },
+    {
+      "name": "String - backtick",
+      "var": "backtick",
+      "line": 144,
+      "severity": "2",
+      "prefix": "APPEND",
+      "randomAnchor": true,
+      "useCacheBuster": null,
+      "requireConsistentEvidence": null,
+      "isTemplate": false,
+      "base": "`",
+      "breaks": [
+        "`",
+        "\\z`"
+      ],
+      "breakTemplates": [],
+      "escapeSets": [
+        [
+          "\\`"
+        ]
+      ],
+      "breakLens": [
+        1,
+        3
+      ],
+      "escapeLens": [
+        2
+      ],
+      "issues": [
+        "LENGTH_MISMATCH breaks=[1, 3] escapes=[2]: if the value is reflected, body-length attributes differ for a boring reason"
+      ]
+    },
+    {
+      "name": "Doublequote plus slash",
+      "var": "quoteSlash",
+      "line": 160,
+      "severity": "4",
+      "prefix": "APPEND",
+      "randomAnchor": true,
+      "useCacheBuster": null,
+      "requireConsistentEvidence": null,
+      "isTemplate": false,
+      "base": null,
+      "breaks": [
+        "\"z\\",
+        "z\"z\\"
+      ],
+      "breakTemplates": [],
+      "escapeSets": [
+        [
+          "\"a\\zz"
+        ],
+        [
+          "z\\z"
+        ],
+        [
+          "z\"z/"
+        ]
+      ],
+      "breakLens": [
+        3,
+        4
+      ],
+      "escapeLens": [
+        3,
+        4,
+        5
+      ],
+      "issues": [
+        "LENGTH_MISMATCH breaks=[3, 4] escapes=[3, 4, 5]: if the value is reflected, body-length attributes differ for a boring reason"
+      ]
+    },
+    {
+      "name": "Singlequote plus slash",
+      "var": "aposSlash",
+      "line": 164,
+      "severity": "4",
+      "prefix": "APPEND",
+      "randomAnchor": true,
+      "useCacheBuster": null,
+      "requireConsistentEvidence": null,
+      "isTemplate": false,
+      "base": null,
+      "breaks": [
+        "'z\\",
+        "z'z\\"
+      ],
+      "breakTemplates": [],
+      "escapeSets": [
+        [
+          "'a\\zz"
+        ],
+        [
+          "z\\z"
+        ],
+        [
+          "z'z/"
+        ]
+      ],
+      "breakLens": [
+        3,
+        4
+      ],
+      "escapeLens": [
+        3,
+        4,
+        5
+      ],
+      "issues": [
+        "LENGTH_MISMATCH breaks=[3, 4] escapes=[3, 4, 5]: if the value is reflected, body-length attributes differ for a boring reason"
+      ]
+    },
+    {
+      "name": "Escape sequence - unicode",
+      "var": "unicodeEscape",
+      "line": 170,
+      "severity": "3",
+      "prefix": "APPEND",
+      "randomAnchor": true,
+      "useCacheBuster": null,
+      "requireConsistentEvidence": null,
+      "isTemplate": false,
+      "base": null,
+      "breaks": [
+        "\\g0041",
+        "\\z0041"
+      ],
+      "breakTemplates": [],
+      "escapeSets": [
+        [
+          "\\u0041"
+        ],
+        [
+          "\\u0042"
+        ]
+      ],
+      "breakLens": [
+        6
+      ],
+      "escapeLens": [
+        6
+      ],
+      "issues": []
+    },
+    {
+      "name": "Escape sequence - regex",
+      "var": "regexEscape",
+      "line": 174,
+      "severity": "4",
+      "prefix": "APPEND",
+      "randomAnchor": true,
+      "useCacheBuster": null,
+      "requireConsistentEvidence": null,
+      "isTemplate": false,
+      "base": null,
+      "breaks": [
+        "\\g0041",
+        "\\z0041"
+      ],
+      "breakTemplates": [],
+      "escapeSets": [
+        [
+          "\\s0041"
+        ],
+        [
+          "\\n0041"
+        ]
+      ],
+      "breakLens": [
+        6
+      ],
+      "escapeLens": [
+        6
+      ],
+      "issues": []
+    },
+    {
+      "name": "Regex breakout - @",
+      "var": "regexBreakoutAt",
+      "line": 179,
+      "severity": "5",
+      "prefix": "APPEND",
+      "randomAnchor": true,
+      "useCacheBuster": null,
+      "requireConsistentEvidence": null,
+      "isTemplate": false,
+      "base": null,
+      "breaks": [
+        "z@",
+        "\\@z@"
+      ],
+      "breakTemplates": [],
+      "escapeSets": [
+        [
+          "z\\@"
+        ],
+        [
+          "\\@z\\@"
+        ]
+      ],
+      "breakLens": [
+        2,
+        4
+      ],
+      "escapeLens": [
+        3,
+        5
+      ],
+      "issues": [
+        "LENGTH_MISMATCH breaks=[2, 4] escapes=[3, 5]: if the value is reflected, body-length attributes differ for a boring reason"
+      ]
+    },
+    {
+      "name": "Regex breakout - /",
+      "var": "regexBreakoutSlash",
+      "line": 183,
+      "severity": "5",
+      "prefix": "APPEND",
+      "randomAnchor": true,
+      "useCacheBuster": null,
+      "requireConsistentEvidence": null,
+      "isTemplate": false,
+      "base": null,
+      "breaks": [
+        "z/",
+        "\\/z/"
+      ],
+      "breakTemplates": [],
+      "escapeSets": [
+        [
+          "z\\/"
+        ],
+        [
+          "\\/z\\/"
+        ]
+      ],
+      "breakLens": [
+        2,
+        4
+      ],
+      "escapeLens": [
+        3,
+        5
+      ],
+      "issues": [
+        "LENGTH_MISMATCH breaks=[2, 4] escapes=[3, 5]: if the value is reflected, body-length attributes differ for a boring reason"
+      ]
+    },
+    {
+      "name": "\"Concatenation: \" + delimiter + concat",
+      "var": "concat_attack",
+      "line": 195,
+      "severity": "7",
+      "prefix": "APPEND",
+      "randomAnchor": true,
+      "useCacheBuster": null,
+      "requireConsistentEvidence": null,
+      "isTemplate": true,
+      "base": null,
+      "breaks": [],
+      "breakTemplates": [
+        "\"z\" + concat + delimiter + \"z(z\" + delimiter + \"z\""
+      ],
+      "escapeSets": [
+        [
+          "\"z(z\" + delimiter + concat + delimiter + \"z\""
+        ],
+        [
+          "\"zx\" + delimiter + concat + delimiter + \"zy\""
+        ]
+      ],
+      "breakLens": [],
+      "escapeLens": [],
+      "issues": []
+    },
+    {
+      "name": "JSON Injection (value)",
+      "var": "jsonValue",
+      "line": 205,
+      "severity": "6",
+      "prefix": "APPEND",
+      "randomAnchor": true,
+      "useCacheBuster": null,
+      "requireConsistentEvidence": null,
+      "isTemplate": true,
+      "base": null,
+      "breaks": [],
+      "breakTemplates": [
+        "\"z\"+delimiter+\",\"+delimiter+\"z\"+delimiter+\"z\"+delimiter+\"z\"",
+        "\"z\"+delimiter+\",\"+delimiter+\"z\"+delimiter+\";\"+delimiter+\"z\"",
+        "\"z\"+delimiter+\",\"+delimiter+\"z\"+delimiter+\".\"+delimiter+\"z\""
+      ],
+      "escapeSets": [
+        [
+          "\"z\"+delimiter+\",\"+delimiter+\"z\"+delimiter+\":\"+delimiter+\"z\""
+        ]
+      ],
+      "breakLens": [],
+      "escapeLens": [],
+      "issues": []
+    },
+    {
+      "name": "JSON Injection (key)",
+      "var": "jsonKey",
+      "line": 212,
+      "severity": "6",
+      "prefix": "APPEND",
+      "randomAnchor": true,
+      "useCacheBuster": null,
+      "requireConsistentEvidence": null,
+      "isTemplate": true,
+      "base": null,
+      "breaks": [],
+      "breakTemplates": [
+        "\"z\"+delimiter+\":\"+delimiter+\"z\"+delimiter+\"z\"+delimiter",
+        "\"z\"+delimiter+\":\"+delimiter+\"z\"+delimiter+\":\"+delimiter",
+        "\"z\"+delimiter+\":\"+delimiter+\"z\"+delimiter+\".\"+delimiter"
+      ],
+      "escapeSets": [
+        [
+          "\"z\"+delimiter+\":\"+delimiter+\"z\"+delimiter+\",\"+delimiter"
+        ]
+      ],
+      "breakLens": [],
+      "escapeLens": [],
+      "issues": []
+    },
+    {
+      "name": "MongoDB Injection",
+      "var": "mongo",
+      "line": 231,
+      "severity": "9",
+      "prefix": "APPEND",
+      "randomAnchor": true,
+      "useCacheBuster": null,
+      "requireConsistentEvidence": null,
+      "isTemplate": true,
+      "base": null,
+      "breaks": [],
+      "breakTemplates": [
+        "wherePrefix+\"0z41\"+whereSuffix",
+        "wherePrefix+\"0v41\"+whereSuffix"
+      ],
+      "escapeSets": [
+        [
+          "wherePrefix+\"0x41\"+whereSuffix"
+        ],
+        [
+          "wherePrefix+\"0x42\"+whereSuffix"
+        ]
+      ],
+      "breakLens": [],
+      "escapeLens": [],
+      "issues": []
+    },
+    {
+      "name": "Interpolation fuzz",
+      "var": "interp",
+      "line": 253,
+      "severity": "2",
+      "prefix": "APPEND",
+      "randomAnchor": true,
+      "useCacheBuster": null,
+      "requireConsistentEvidence": null,
+      "isTemplate": false,
+      "base": null,
+      "breaks": [
+        "%{{z${{z",
+        "z%{{zz${{z"
+      ],
+      "breakTemplates": [],
+      "escapeSets": [
+        [
+          "%}}$}}"
+        ],
+        [
+          "}}%z}}$z"
+        ],
+        [
+          "z%}}zz$}}z"
+        ]
+      ],
+      "breakLens": [
+        8,
+        10
+      ],
+      "escapeLens": [
+        6,
+        8,
+        10
+      ],
+      "issues": [
+        "LENGTH_MISMATCH breaks=[8, 10] escapes=[6, 8, 10]: if the value is reflected, body-length attributes differ for a boring reason"
+      ]
+    },
+    {
+      "name": "Interpolation - curly",
+      "var": "curlyParse",
+      "line": 259,
+      "severity": "5",
+      "prefix": "APPEND",
+      "randomAnchor": true,
+      "useCacheBuster": null,
+      "requireConsistentEvidence": null,
+      "isTemplate": false,
+      "base": null,
+      "breaks": [
+        "{{z",
+        "z{{z"
+      ],
+      "breakTemplates": [],
+      "escapeSets": [
+        [
+          "z}}z"
+        ],
+        [
+          "}}z"
+        ],
+        [
+          "z}}"
+        ]
+      ],
+      "breakLens": [
+        3,
+        4
+      ],
+      "escapeLens": [
+        3,
+        4
+      ],
+      "issues": []
+    },
+    {
+      "name": "Interpolation - dollar",
+      "var": "dollarParse",
+      "line": 267,
+      "severity": "5",
+      "prefix": "APPEND",
+      "randomAnchor": true,
+      "useCacheBuster": null,
+      "requireConsistentEvidence": null,
+      "isTemplate": false,
+      "base": null,
+      "breaks": [
+        "${{z",
+        "z${{z"
+      ],
+      "breakTemplates": [],
+      "escapeSets": [
+        [
+          "$}}"
+        ],
+        [
+          "}}$z"
+        ],
+        [
+          "z$}}z"
+        ]
+      ],
+      "breakLens": [
+        4,
+        5
+      ],
+      "escapeLens": [
+        3,
+        4,
+        5
+      ],
+      "issues": [
+        "LENGTH_MISMATCH breaks=[4, 5] escapes=[3, 4, 5]: if the value is reflected, body-length attributes differ for a boring reason"
+      ]
+    },
+    {
+      "name": "Interpolation - percent",
+      "var": "percentParse",
+      "line": 272,
+      "severity": "5",
+      "prefix": "APPEND",
+      "randomAnchor": true,
+      "useCacheBuster": null,
+      "requireConsistentEvidence": null,
+      "isTemplate": false,
+      "base": null,
+      "breaks": [
+        "%{{41",
+        "41%{{41"
+      ],
+      "breakTemplates": [],
+      "escapeSets": [
+        [
+          "%}}"
+        ],
+        [
+          "}}%41"
+        ],
+        [
+          "41%}}41"
+        ]
+      ],
+      "breakLens": [
+        5,
+        7
+      ],
+      "escapeLens": [
+        3,
+        5,
+        7
+      ],
+      "issues": [
+        "LENGTH_MISMATCH breaks=[5, 7] escapes=[3, 5, 7]: if the value is reflected, body-length attributes differ for a boring reason"
+      ]
+    },
+    {
+      "name": "\"Soft-concatenation: \" + delimiter + concat",
+      "var": "concat_attack",
+      "line": 300,
+      "severity": "5",
+      "prefix": "APPEND",
+      "randomAnchor": false,
+      "useCacheBuster": true,
+      "requireConsistentEvidence": null,
+      "isTemplate": true,
+      "base": null,
+      "breaks": [],
+      "breakTemplates": [
+        "concat + delimiter + delimiter",
+        "delimiter + concat + concat",
+        "delimiter + concat + delimiter + delimiter",
+        "concat + delimiter + delimiter",
+        "delimiter + concat + delimiter + delimiter"
+      ],
+      "escapeSets": [
+        [
+          "delimiter + concat + delimiter"
+        ],
+        [
+          "delimiter + concat + delimiter + delimiter + concat + delimiter"
+        ],
+        [
+          "delimiter + concat + delimiter + delimiter + concat + delimiter + delimiter + concat + delimiter"
+        ]
+      ],
+      "breakLens": [],
+      "escapeLens": [],
+      "issues": []
+    },
+    {
+      "name": "Soft function injection",
+      "var": "basicFunction",
+      "line": 325,
+      "severity": "8",
+      "prefix": "APPEND",
+      "randomAnchor": false,
+      "useCacheBuster": true,
+      "requireConsistentEvidence": null,
+      "isTemplate": true,
+      "base": null,
+      "breaks": [],
+      "breakTemplates": [
+        "delim + concat + \"substri('',0,0)\" + concat + delim",
+        "delim + concat + \"substrin('',0,0)\" + concat + delim"
+      ],
+      "escapeSets": [
+        [
+          "delim + concat + \"substr('',0,0)\" + concat + delim"
+        ],
+        [
+          "delim + concat + \"substr('foo',0,0)\" + concat + delim"
+        ]
+      ],
+      "breakLens": [],
+      "escapeLens": [],
+      "issues": []
+    },
+    {
+      "name": "Soft function injection 2",
+      "var": "basicFunction2",
+      "line": 330,
+      "severity": "8",
+      "prefix": "APPEND",
+      "randomAnchor": false,
+      "useCacheBuster": true,
+      "requireConsistentEvidence": null,
+      "isTemplate": true,
+      "base": null,
+      "breaks": [],
+      "breakTemplates": [
+        "delim + concat + \"substri('',0,0)\" + concat + delim",
+        "delim + concat + \"substrin('',0,0)\" + concat + delim"
+      ],
+      "escapeSets": [
+        [
+          "delim + concat + \"substring('',0,0)\" + concat + delim"
+        ],
+        [
+          "delim + concat + \"substring('foo',0,0)\" + concat + delim"
+        ]
+      ],
+      "breakLens": [],
+      "escapeLens": [],
+      "issues": []
+    },
+    {
+      "name": "Soft method injection",
+      "var": "basicMethod",
+      "line": 335,
+      "severity": "8",
+      "prefix": "APPEND",
+      "randomAnchor": false,
+      "useCacheBuster": true,
+      "requireConsistentEvidence": null,
+      "isTemplate": true,
+      "base": null,
+      "breaks": [],
+      "breakTemplates": [
+        "delim + concat + \"''.substri(0,0)\" + concat + delim",
+        "delim + concat + \"''.substrin(0,0)\" + concat + delim"
+      ],
+      "escapeSets": [
+        [
+          "delim + concat + \"''.substr(0,0)\" + concat + delim"
+        ],
+        [
+          "delim + concat + \"''.substr(0,0)\" + concat + delim"
+        ]
+      ],
+      "breakLens": [],
+      "escapeLens": [],
+      "issues": []
+    },
+    {
+      "name": "Divide by 0",
+      "var": "div0",
+      "line": 349,
+      "severity": "4",
+      "prefix": "APPEND",
+      "randomAnchor": false,
+      "useCacheBuster": true,
+      "requireConsistentEvidence": null,
+      "isTemplate": false,
+      "base": null,
+      "breaks": [
+        "/0",
+        "/00",
+        "/000"
+      ],
+      "breakTemplates": [],
+      "escapeSets": [
+        [
+          "/1"
+        ],
+        [
+          "-0"
+        ],
+        [
+          "/01"
+        ],
+        [
+          "-00"
+        ]
+      ],
+      "breakLens": [
+        2,
+        3,
+        4
+      ],
+      "escapeLens": [
+        2,
+        3
+      ],
+      "issues": [
+        "LENGTH_MISMATCH breaks=[2, 3, 4] escapes=[2, 3]: if the value is reflected, body-length attributes differ for a boring reason"
+      ]
+    },
+    {
+      "name": "Divide by expression",
+      "var": "divArith",
+      "line": 359,
+      "severity": "5",
+      "prefix": "APPEND",
+      "randomAnchor": false,
+      "useCacheBuster": true,
+      "requireConsistentEvidence": null,
+      "isTemplate": false,
+      "base": null,
+      "breaks": [
+        "/(2-2)",
+        "/(3-3)"
+      ],
+      "breakTemplates": [],
+      "escapeSets": [
+        [
+          "/(2-1)"
+        ],
+        [
+          "/(1*1)"
+        ]
+      ],
+      "breakLens": [
+        6
+      ],
+      "escapeLens": [
+        6
+      ],
+      "issues": []
+    },
+    {
+      "name": "Comment injection",
+      "var": "comment",
+      "line": 374,
+      "severity": "3",
+      "prefix": "APPEND",
+      "randomAnchor": false,
+      "useCacheBuster": true,
+      "requireConsistentEvidence": null,
+      "isTemplate": false,
+      "base": null,
+      "breaks": [
+        "/'z*/**/",
+        "/*/*/z'*/",
+        "/*z'/"
+      ],
+      "breakTemplates": [],
+      "escapeSets": [
+        [
+          "/*'z*/"
+        ],
+        [
+          "/**z'*/"
+        ],
+        [
+          "/*//z'//*/"
+        ]
+      ],
+      "breakLens": [
+        5,
+        8,
+        9
+      ],
+      "escapeLens": [
+        6,
+        7,
+        10
+      ],
+      "issues": [
+        "LENGTH_MISMATCH breaks=[5, 8, 9] escapes=[6, 7, 10]: if the value is reflected, body-length attributes differ for a boring reason"
+      ]
+    },
+    {
+      "name": "HTML tag stripping (WAF?)",
+      "var": "htmlTag",
+      "line": 381,
+      "severity": "4",
+      "prefix": "APPEND",
+      "randomAnchor": false,
+      "useCacheBuster": true,
+      "requireConsistentEvidence": null,
+      "isTemplate": false,
+      "base": null,
+      "breaks": [
+        ">zz<",
+        "z>z<z",
+        "z>><z"
+      ],
+      "breakTemplates": [],
+      "escapeSets": [
+        [
+          "<zz>"
+        ],
+        [
+          "<-zz->"
+        ],
+        [
+          "<xyz>"
+        ]
+      ],
+      "breakLens": [
+        4,
+        5
+      ],
+      "escapeLens": [
+        4,
+        5,
+        6
+      ],
+      "issues": [
+        "LENGTH_MISMATCH breaks=[4, 5] escapes=[4, 5, 6]: if the value is reflected, body-length attributes differ for a boring reason"
+      ]
+    },
+    {
+      "name": "HTML comment injection (WAF?)",
+      "var": "htmlComment",
+      "line": 388,
+      "severity": "4",
+      "prefix": "APPEND",
+      "randomAnchor": false,
+      "useCacheBuster": true,
+      "requireConsistentEvidence": null,
+      "isTemplate": false,
+      "base": null,
+      "breaks": [
+        "<!-zz-->",
+        "<--zz-->",
+        "<!--zz->"
+      ],
+      "breakTemplates": [],
+      "escapeSets": [
+        [
+          "<!--zz-->"
+        ],
+        [
+          "<!--z-z-->"
+        ],
+        [
+          "<!-->z<-->"
+        ]
+      ],
+      "breakLens": [
+        8
+      ],
+      "escapeLens": [
+        9,
+        10
+      ],
+      "issues": [
+        "LENGTH_MISMATCH breaks=[8] escapes=[9, 10]: if the value is reflected, body-length attributes differ for a boring reason"
+      ]
+    },
+    {
+      "name": "MySQL order-by",
+      "var": "procedure",
+      "line": 395,
+      "severity": "7",
+      "prefix": "APPEND",
+      "randomAnchor": false,
+      "useCacheBuster": true,
+      "requireConsistentEvidence": null,
+      "isTemplate": false,
+      "base": null,
+      "breaks": [
+        " procedure analyse (0,0,0)-- -",
+        " procedure analyze (0,0)-- -"
+      ],
+      "breakTemplates": [],
+      "escapeSets": [
+        [
+          " procedure analyse (0,0)-- -"
+        ],
+        [
+          " procedure analyse (0,0)-- -z"
+        ]
+      ],
+      "breakLens": [
+        28,
+        30
+      ],
+      "escapeLens": [
+        28,
+        29
+      ],
+      "issues": [
+        "LENGTH_MISMATCH breaks=[28, 30] escapes=[28, 29]: if the value is reflected, body-length attributes differ for a boring reason"
+      ]
+    },
+    {
+      "name": "Order-by function injection",
+      "var": "commaAbs",
+      "line": 402,
+      "severity": "5",
+      "prefix": "APPEND",
+      "randomAnchor": false,
+      "useCacheBuster": true,
+      "requireConsistentEvidence": null,
+      "isTemplate": false,
+      "base": null,
+      "breaks": [
+        ",abz(1)",
+        ",abs(0,1)",
+        ",abs()",
+        "abs(z)"
+      ],
+      "breakTemplates": [],
+      "escapeSets": [
+        [
+          ",ABS(1)"
+        ],
+        [
+          ",abs(1)"
+        ],
+        [
+          ",abs(01)"
+        ]
+      ],
+      "breakLens": [
+        6,
+        7,
+        9
+      ],
+      "escapeLens": [
+        7,
+        8
+      ],
+      "issues": [
+        "LENGTH_MISMATCH breaks=[6, 7, 9] escapes=[7, 8]: if the value is reflected, body-length attributes differ for a boring reason"
+      ]
+    },
+    {
+      "name": "File Path Manipulation",
+      "var": "dotSlash",
+      "line": 414,
+      "severity": "3",
+      "prefix": "PREPEND",
+      "randomAnchor": false,
+      "useCacheBuster": true,
+      "requireConsistentEvidence": null,
+      "isTemplate": false,
+      "base": null,
+      "breaks": [
+        "../",
+        "z/",
+        "_/",
+        "./../"
+      ],
+      "breakTemplates": [],
+      "escapeSets": [
+        [
+          "./"
+        ],
+        [
+          "././"
+        ],
+        [
+          "./././"
+        ]
+      ],
+      "breakLens": [
+        2,
+        3,
+        5
+      ],
+      "escapeLens": [
+        2,
+        4,
+        6
+      ],
+      "issues": [
+        "LENGTH_MISMATCH breaks=[2, 3, 5] escapes=[2, 4, 6]: if the value is reflected, body-length attributes differ for a boring reason"
+      ]
+    },
+    {
+      "name": "File Path Manipulation (normalised)",
+      "var": "normalisedDotSlash",
+      "line": 421,
+      "severity": "4",
+      "prefix": "PREPEND",
+      "randomAnchor": false,
+      "useCacheBuster": true,
+      "requireConsistentEvidence": null,
+      "isTemplate": false,
+      "base": null,
+      "breaks": [
+        "../",
+        "z/",
+        "_/",
+        "./../"
+      ],
+      "breakTemplates": [],
+      "escapeSets": [
+        [
+          "./cow/../"
+        ],
+        [
+          "./foo/bar/../../"
+        ],
+        [
+          "./z/../"
+        ]
+      ],
+      "breakLens": [
+        2,
+        3,
+        5
+      ],
+      "escapeLens": [
+        7,
+        9,
+        16
+      ],
+      "issues": [
+        "LENGTH_MISMATCH breaks=[2, 3, 5] escapes=[7, 9, 16]: if the value is reflected, body-length attributes differ for a boring reason"
+      ]
+    },
+    {
+      "name": "Possible Nginx alias escape",
+      "var": "orangeSlash",
+      "line": 432,
+      "severity": "4",
+      "prefix": "REPLACE",
+      "randomAnchor": false,
+      "useCacheBuster": true,
+      "requireConsistentEvidence": null,
+      "isTemplate": true,
+      "base": null,
+      "breaks": [],
+      "breakTemplates": [
+        "baseValue + \"..\"",
+        "baseValue + \"../.\""
+      ],
+      "escapeSets": [
+        [
+          "firstBlat + \"..\""
+        ],
+        [
+          "lastBlat + \"..\""
+        ],
+        [
+          "baseValue + \"/../xyz\""
+        ]
+      ],
+      "breakLens": [],
+      "escapeLens": [],
+      "issues": []
+    },
+    {
+      "name": "Confirmed Nginx alias escape type 1",
+      "var": "guessFolder",
+      "line": 440,
+      "severity": "8",
+      "prefix": "REPLACE",
+      "randomAnchor": false,
+      "useCacheBuster": true,
+      "requireConsistentEvidence": null,
+      "isTemplate": true,
+      "base": null,
+      "breaks": [],
+      "breakTemplates": [
+        "baseValue + \"../asdfz\"",
+        "baseValue + \"../statik\""
+      ],
+      "escapeSets": [
+        [
+          "baseValue + \"../static\""
+        ],
+        [
+          "baseValue + \"../static/.\""
+        ]
+      ],
+      "breakLens": [],
+      "escapeLens": [],
+      "issues": []
+    },
+    {
+      "name": "Confirmed Nginx alias escape type 2",
+      "var": "guessFolder2",
+      "line": 447,
+      "severity": "7",
+      "prefix": "REPLACE",
+      "randomAnchor": false,
+      "useCacheBuster": true,
+      "requireConsistentEvidence": null,
+      "isTemplate": true,
+      "base": null,
+      "breaks": [],
+      "breakTemplates": [
+        "baseValue + \"../asdfz\"",
+        "baseValue + \"../statik\""
+      ],
+      "escapeSets": [
+        [
+          "baseValue + \"../\" + baseValue"
+        ],
+        [
+          "baseValue + \"../\" + baseValue + \"/.\""
+        ]
+      ],
+      "breakLens": [],
+      "escapeLens": [],
+      "issues": []
+    },
+    {
+      "name": "Proxy subfolder escape?",
+      "var": "proxyEscape",
+      "line": 454,
+      "severity": "4",
+      "prefix": "REPLACE",
+      "randomAnchor": false,
+      "useCacheBuster": true,
+      "requireConsistentEvidence": null,
+      "isTemplate": false,
+      "base": null,
+      "breaks": [
+        "..;/",
+        "..;foo/",
+        "..;bar/"
+      ],
+      "breakTemplates": [],
+      "escapeSets": [
+        [
+          "../"
+        ],
+        [
+          ".;/"
+        ],
+        [
+          "..:/"
+        ],
+        [
+          "..:bar/"
+        ],
+        [
+          "..#/"
+        ]
+      ],
+      "breakLens": [
+        4,
+        7
+      ],
+      "escapeLens": [
+        3,
+        4,
+        7
+      ],
+      "issues": [
+        "LENGTH_MISMATCH breaks=[4, 7] escapes=[3, 4, 7]: if the value is reflected, body-length attributes differ for a boring reason"
+      ]
+    },
+    {
+      "name": "\"Magic value: \"+magicValue",
+      "var": "magic",
+      "line": 483,
+      "severity": "3",
+      "prefix": "REPLACE",
+      "randomAnchor": true,
+      "useCacheBuster": true,
+      "requireConsistentEvidence": true,
+      "isTemplate": true,
+      "base": null,
+      "breaks": [],
+      "breakTemplates": [
+        "magicValue"
+      ],
+      "escapeSets": [
+        [
+          "corruptedMagic"
+        ]
+      ],
+      "breakLens": [],
+      "escapeLens": [],
+      "issues": []
+    },
+    {
+      "name": "Function hijacking",
+      "var": "functionCall",
+      "line": 492,
+      "severity": "6",
+      "prefix": "REPLACE",
+      "randomAnchor": true,
+      "useCacheBuster": null,
+      "requireConsistentEvidence": null,
+      "isTemplate": false,
+      "base": null,
+      "breaks": [
+        "sprimtf",
+        "sprintg",
+        "exception",
+        "malloc"
+      ],
+      "breakTemplates": [],
+      "escapeSets": [
+        [
+          "sprintf"
+        ]
+      ],
+      "breakLens": [
+        6,
+        7,
+        9
+      ],
+      "escapeLens": [
+        7
+      ],
+      "issues": [
+        "LENGTH_MISMATCH breaks=[6, 7, 9] escapes=[7]: if the value is reflected, body-length attributes differ for a boring reason"
+      ]
+    },
+    {
+      "name": "title",
+      "var": "iterable1",
+      "line": 562,
+      "severity": "1",
+      "prefix": "REPLACE",
+      "randomAnchor": false,
+      "useCacheBuster": true,
+      "requireConsistentEvidence": null,
+      "isTemplate": true,
+      "base": null,
+      "breaks": [],
+      "breakTemplates": [
+        "\"\"+(value+1)",
+        "\"0\"+(value+1)",
+        "\"00\"+(value+1)"
+      ],
+      "escapeSets": [
+        [
+          "baseValue"
+        ],
+        [
+          "\"0\"+baseValue"
+        ],
+        [
+          "\"00\"+baseValue"
+        ],
+        [
+          "\"000\"+baseValue"
+        ]
+      ],
+      "breakLens": [],
+      "escapeLens": [],
+      "issues": []
+    },
+    {
+      "name": "title",
+      "var": "iterable2",
+      "line": 571,
+      "severity": "1",
+      "prefix": "REPLACE",
+      "randomAnchor": false,
+      "useCacheBuster": true,
+      "requireConsistentEvidence": null,
+      "isTemplate": true,
+      "base": null,
+      "breaks": [],
+      "breakTemplates": [
+        "\"\"+(value+2)",
+        "\"0\"+(value+2)",
+        "\"00\"+(value+2)"
+      ],
+      "escapeSets": [
+        [
+          "\"\"+(value+1)"
+        ],
+        [
+          "\"0\"+(value+1)"
+        ],
+        [
+          "\"00\"+(value+1)"
+        ],
+        [
+          "\"000\"+(value+1)"
+        ]
+      ],
+      "breakLens": [],
+      "escapeLens": [],
+      "issues": []
+    }
+  ],
+  "TransformationScan.java": []
+}
