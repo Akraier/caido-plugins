@@ -1,0 +1,17 @@
+{
+  "name": "@caido-backslash/backend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@caido-backslash/engine": "workspace:*"
+  },
+  "devDependencies": {
+    "@caido/sdk-backend": "0.57.1",
+    "typescript": "5.9.2",
+    "vite": "5.4.11"
+  }
+}

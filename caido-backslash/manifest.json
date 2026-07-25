@@ -1,0 +1,28 @@
+{
+  "id": "caido-backslash",
+  "name": "Backslash",
+  "version": "0.1.0",
+  "description": "Probe-pair detection of unknown server-side injection classes. Reports a parameter only when the difference survives length, punctuation, byte-level and drift control arms.",
+  "author": {
+    "name": "Akraier",
+    "url": "https://github.com/akraier"
+  },
+  "plugins": [
+    {
+      "kind": "backend",
+      "id": "caido-backslash-backend",
+      "name": "Backslash Backend",
+      "runtime": "javascript",
+      "entrypoint": "backend/script.js"
+    },
+    {
+      "kind": "frontend",
+      "id": "caido-backslash-frontend",
+      "name": "Backslash",
+      "entrypoint": "frontend/script.js",
+      "backend": {
+        "id": "caido-backslash-backend"
+      }
+    }
+  ]
+}

@@ -135,6 +135,17 @@ export { COUNTER_SPECS, SIMILARITY_THRESHOLD, differingFeatures, featurise } fro
 export type { ArmBuilder, Canary, LadderDeps, LadderOutcome, ProbeArms } from "./detect/ladder.ts";
 export { M_ESTABLISH, M_FILTER, M_SCREEN, applyDeltaVeto, runLadder } from "./detect/ladder.ts";
 
+export type {
+  DiagnosticKind,
+  SuiteDiagnostic,
+  SuiteEvents,
+  SuiteFinding,
+  SuiteOptions,
+  SuiteSummary,
+  TargetCoordinates,
+} from "./detect/runner.ts";
+export { PayloadNotDeliverable, runSuite } from "./detect/runner.ts";
+
 export type { Confidence, ControlArm, ControlName, Side, VetoResult } from "./detect/attribution.ts";
 export {
   CONTROL_REPLICATES,

@@ -5,13 +5,16 @@
   "description": "Backslash-powered scanning for Caido: probe-pair detection of unknown server-side injection classes",
   "type": "module",
   "scripts": {
+    "build": "node scripts/clean.js && pnpm --filter @caido-backslash/backend build && pnpm --filter @caido-backslash/frontend build && node scripts/pack.js",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
     "bench": "qjs packages/engine/bench/fusedbench.js"
   },
   "devDependencies": {
     "typescript": "5.9.2",
-    "vitest": "3.2.3"
+    "vitest": "3.2.3",
+    "@caido/plugin-manifest": "0.3.0",
+    "jszip": "3.10.1"
   },
   "packageManager": "pnpm@11.5.0"
 }

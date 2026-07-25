@@ -12,7 +12,7 @@ difference away, the input is reported as anomalously handled.
 
 ## Status
 
-Runnable and testable from the command line. Not yet packaged as a Caido plugin.
+Installable as a Caido plugin, and also runnable from the command line.
 
 | Component | State |
 |---|---|
@@ -24,16 +24,37 @@ Runnable and testable from the command line. Not yet packaged as a Caido plugin.
 | Screening ladder S0 to S2 | working |
 | Control-arm attribution and confidence grading | working |
 | CLI over raw sockets | working |
-| Permutation statistic (S4), calibration tiers, Caido plugin adapter | not started |
+| Caido plugin: backend transport, RPC, findings, context menu, results page | working |
+| Permutation statistic (S4), calibration tiers, multipart surfaces | not started |
 
 318 unit tests plus an end-to-end suite that drives the whole chain against synthetic targets.
 
-## Try it
+## Install into Caido
+
+```sh
+pnpm install
+pnpm run build          # -> dist/plugin.zip
+```
+
+Then in Caido: Plugins -> Install -> pick `dist/plugin.zip`. Right-click any request in HTTP History
+or the request pane and choose **Backslash: scan this request**; results stream into the Backslash
+page in the sidebar.
+
+Findings are written to Caido's own Findings page as well. Core `FindingSpec` has no severity field,
+so confidence is carried in the description text — the community scanner works around the same gap
+the same way.
+
+Probe traffic is sent with `save: false` so thousands of requests do not flood the project database.
+When a finding is confirmed, the winning break arm is re-sent with `save: true` and *that* request is
+the one cited, which guarantees the attached exchange is the one the claim was computed from. Note
+this only works because the plugin is standalone: routed through the community scanner's queue, the
+options argument is dropped and every send is persisted regardless.
+
+## Try it without Caido
 
 Requires Node 23+ (for TypeScript type stripping) and pnpm.
 
 ```sh
-pnpm install
 pnpm -r test          # 318 tests
 pnpm -r typecheck
 ```

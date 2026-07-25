@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noFallthroughCasesInSwitch": true,
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    // caido:plugin and caido:utils are ambient module declarations shipped by the SDK package, so
+    // it has to be referenced here rather than imported.
+    "types": ["@caido/sdk-backend"]
+  },
+  "include": ["src/**/*.ts", "vite.config.ts"]
+}

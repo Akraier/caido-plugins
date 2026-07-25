@@ -139,8 +139,8 @@ export function createProbeTransport(
   // later comparisons against "halted" look unreachable even though another closure can set it.
   const currentState = (): ThrottleState => state;
 
-  /** Rolling record of whether each recent outcome was usable. */
-  const window: boolean[] = [];
+  /** Rolling record of whether each recent outcome was usable. Drives the halt decision. */
+  const recentOutcomes: boolean[] = [];
   /** Start timestamps within the last second, for the requests-per-second ceiling. */
   let recentStarts: number[] = [];
   /** Serialises the gap/rate wait so concurrent callers cannot all pass the same check. */
@@ -161,14 +161,14 @@ export function createProbeTransport(
   }
 
   function noteOutcome(usable: boolean): void {
-    window.push(usable);
-    if (window.length > config.haltWindow) window.shift();
+    recentOutcomes.push(usable);
+    if (recentOutcomes.length > config.haltWindow) recentOutcomes.shift();
 
-    if (window.length < config.haltMinObservations) return;
-    const unusable = window.reduce((n, ok) => (ok ? n : n + 1), 0);
-    const rate = unusable / window.length;
+    if (recentOutcomes.length < config.haltMinObservations) return;
+    const unusable = recentOutcomes.reduce((n, ok) => (ok ? n : n + 1), 0);
+    const rate = unusable / recentOutcomes.length;
     if (rate >= config.haltUnusableRate) {
-      doHalt({ kind: "unusable-rate", rate, window: window.length });
+      doHalt({ kind: "unusable-rate", rate, window: recentOutcomes.length });
     }
   }
 
