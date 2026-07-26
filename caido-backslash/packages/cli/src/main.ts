@@ -50,6 +50,7 @@ interface Args {
   readonly probeFilter?: string;
   readonly maxSlots: number;
   readonly verbose: boolean;
+  readonly listSlots: boolean;
   readonly followRedirects: boolean;
   readonly maxHops: number;
   readonly observeUrl?: string;
@@ -67,7 +68,8 @@ function parseArgs(argv: readonly string[]): Args {
       "usage: backslash --request <raw-request-file> --host <host> [--port 443] [--no-tls]\n" +
         "                 [--allow host,host] [--insecure] [--delay-ms 0] [--concurrency 2]\n" +
         "                 [--slot <name>] [--probe <id>] [--max-slots 10] [--verbose]\n" +
-        "                 [--follow-redirects] [--max-hops 3] [--observe <url-or-path>]",
+        "                 [--follow-redirects] [--max-hops 3] [--observe <url-or-path>]\n" +
+        "                 [--list-slots]   list injectable parameters and exit, sending nothing",
     );
   }
   const tls = !argv.includes("--no-tls");
@@ -76,6 +78,7 @@ function parseArgs(argv: readonly string[]): Args {
   const probe = get("--probe");
   const observe = get("--observe");
   return {
+    listSlots: argv.includes("--list-slots"),
     followRedirects: argv.includes("--follow-redirects"),
     maxHops: Number.parseInt(get("--max-hops") ?? "3", 10),
     ...(observe === undefined ? {} : { observeUrl: observe }),
@@ -149,8 +152,27 @@ async function main(): Promise<void> {
   const template = locate(raw);
   const enumeration = enumerateSlots(template);
 
+  // Discovery before scanning. Working out a slot name by trial and error against a live target is
+  // both slow and rude; --slot silently matches nothing if the name is wrong, which reads as "clean".
+  if (args.listSlots) {
+    console.log(`${enumeration.slots.length} injectable parameter(s):`);
+    for (const s of enumeration.slots) {
+      const preview = s.baseValue === "" ? "" : ` = ${s.baseValue.slice(0, 60)}`;
+      console.log(`  ${s.kind.padEnd(14)} ${s.name}${preview}`);
+    }
+    for (const d of enumeration.deferred) {
+      console.log(`  not injectable — ${d.kind}: ${d.reason}`);
+    }
+    return;
+  }
+
   const slots = enumeration.slots
-    .filter((s) => args.slotFilter === undefined || s.name === args.slotFilter)
+    .filter(
+      (s) =>
+        args.slotFilter === undefined ||
+        s.name === args.slotFilter ||
+        `${s.kind} ${s.name}` === args.slotFilter,
+    )
     .slice(0, args.maxSlots);
   const probes = ALL_STATIC_PROBES.filter(
     (p) => args.probeFilter === undefined || p.id === args.probeFilter,

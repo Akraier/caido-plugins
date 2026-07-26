@@ -31,6 +31,7 @@ import {
 
 import type {
   ApiResult,
+  RequestSummary,
   ScanFinding,
   ScanProgress,
   ScanRequestInput,
@@ -284,7 +285,13 @@ async function runScan(sdk: BackendSDK, scanId: string, input: ScanRequestInput)
     const enumeration = enumerateSlots(template);
 
     const slots = enumeration.slots
-      .filter((s) => input.slotFilter === undefined || s.name === input.slotFilter)
+      .filter(
+        (s) =>
+          (input.slotFilter === undefined || s.name === input.slotFilter) &&
+          // Names collide across surfaces: `?q=` and a body `q=` are both called "q". Without the kind
+          // a pick of one silently scanned both.
+          (input.slotKind === undefined || s.kind === input.slotKind),
+      )
       .slice(0, budget.slots);
     // `probes: null` means the entire catalogue, so it cannot fall behind as probes are added.
     const probes =
@@ -524,6 +531,7 @@ async function startScan(
 
 export type API = DefineAPI<{
   startScan: typeof startScanHandler;
+  inspectRequest: typeof inspectRequestHandler;
   cancelScan: typeof cancelScanHandler;
   getResult: typeof getResultHandler;
   listScans: typeof listScansHandler;
@@ -531,6 +539,59 @@ export type API = DefineAPI<{
 
 function startScanHandler(sdk: BackendSDK, input: ScanRequestInput): Promise<ApiResult<{ scanId: string }>> {
   return startScan(sdk, input);
+}
+
+/** Longest parameter value shown in the picker. Enough to recognise a value, not to fill the row. */
+const PREVIEW_CHARS = 40;
+
+/**
+ * Describe a request's injectable surfaces for the configuration UI.
+ *
+ * Read-only: this fetches the stored request and parses it, and sends nothing to the target. Safe to
+ * call the moment a tab opens.
+ */
+async function inspectRequestHandler(
+  sdk: BackendSDK,
+  requestId: string,
+): Promise<ApiResult<RequestSummary>> {
+  let stored;
+  try {
+    stored = await sdk.requests.get(requestId);
+  } catch (error) {
+    return err(`could not read request ${requestId}: ${describeError(error)}`);
+  }
+  if (stored === undefined) return err(`request ${requestId} not found`);
+
+  try {
+    const raw = stored.request.getRaw().toBytes();
+    const template = locate(raw);
+    const enumeration = enumerateSlots(template);
+    const contentType = stored.request.getHeader("content-type")?.[0];
+
+    return ok({
+      method: stored.request.getMethod(),
+      target: stored.request.getPath() + (stored.request.getQuery() === "" ? "" : `?${stored.request.getQuery()}`),
+      ...(contentType === undefined ? {} : { contentType }),
+      bodyLength: raw.length - template.bodyStart,
+      slots: enumeration.slots.map((slot) => ({
+        kind: slot.kind,
+        family: slot.family,
+        name: slot.name,
+        preview:
+          slot.baseValue.length > PREVIEW_CHARS
+            ? `${slot.baseValue.slice(0, PREVIEW_CHARS)}...`
+            : slot.baseValue,
+      })),
+      deferred: enumeration.deferred.map((d) => ({ kind: d.kind, reason: d.reason })),
+    });
+  } catch (error) {
+    // A request the parser cannot handle must say so here, rather than looking like "no parameters".
+    return err(`could not parse request ${requestId}: ${describeError(error)}`);
+  }
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function cancelScanHandler(_sdk: SDK, scanId: string): ApiResult<null> {
@@ -553,6 +614,7 @@ function listScansHandler(): ApiResult<readonly ScanProgress[]> {
 
 export function init(sdk: BackendSDK): void {
   sdk.api.register("startScan", startScanHandler);
+  sdk.api.register("inspectRequest", inspectRequestHandler);
   sdk.api.register("cancelScan", cancelScanHandler);
   sdk.api.register("getResult", getResultHandler);
   sdk.api.register("listScans", listScansHandler);

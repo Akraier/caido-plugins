@@ -63,6 +63,14 @@ export interface ScanRequestInput {
   /** Restrict to one slot by name. Empty means all. */
   readonly slotFilter?: string;
   /**
+   * Restrict to one slot KIND alongside `slotFilter`.
+   *
+   * Names are not unique across surfaces: a request with `?q=` and a body `q=` has two slots called
+   * "q", and filtering by name alone silently scanned both. The picker sends the kind so the choice is
+   * the one that was made.
+   */
+  readonly slotKind?: string;
+  /**
    * Follow redirects and measure the final response instead of the 3xx.
    *
    * Template injection frequently renders somewhere other than where it was injected: the handler
@@ -155,6 +163,38 @@ export interface ScanResult {
   readonly haltReason?: string;
 }
 
+/**
+ * One injectable surface, described for the configuration UI.
+ *
+ * Enumeration needs the raw request bytes, which only the backend can fetch, so the frontend cannot
+ * work this out for itself. Without it the parameter field was a name typed from memory -- fine for a
+ * query string visible in the tab header, useless for a POST body, where the operator had to leave the
+ * panel, find the request, read the body, and come back.
+ */
+export interface SlotSummary {
+  readonly kind: string;
+  readonly family: string;
+  readonly name: string;
+  /** The parameter's current value, truncated. Empty for an insertion slot such as a new header. */
+  readonly preview: string;
+}
+
+export interface RequestSummary {
+  readonly method: string;
+  readonly target: string;
+  readonly contentType?: string;
+  readonly bodyLength: number;
+  readonly slots: readonly SlotSummary[];
+  /**
+   * Surfaces present on the request but not injectable yet.
+   *
+   * Surfaced during configuration, not only in the result: "my body parameter is not in the list" and
+   * "multipart is not supported yet" are the same fact, and the operator should learn it before
+   * spending a scan rather than after.
+   */
+  readonly deferred: readonly { readonly kind: string; readonly reason: string }[];
+}
+
 export type ApiResult<T> =
   | { readonly kind: "ok"; readonly value: T }
   | { readonly kind: "error"; readonly error: string };
@@ -181,6 +221,8 @@ export type BackslashEvents = {
  */
 export type BackslashApi = {
   startScan: (input: ScanRequestInput) => Promise<ApiResult<{ scanId: string }>>;
+  /** Enumerate what is injectable, so the configuration UI can offer a choice instead of a text box. */
+  inspectRequest: (requestId: string) => Promise<ApiResult<RequestSummary>>;
   cancelScan: (scanId: string) => Promise<ApiResult<null>>;
   getResult: (scanId: string) => Promise<ApiResult<ScanResult | null>>;
   listScans: () => Promise<ApiResult<readonly ScanProgress[]>>;

@@ -28,6 +28,7 @@ import { AGGRESSIVITY_BUDGET } from "../../shared/src/api.ts";
 import type {
   BackslashApi,
   BackslashEvents,
+  RequestSummary,
   ScanFinding,
   ScanProgress,
   ScanRequestInput,
@@ -52,6 +53,8 @@ interface Settings {
   delayMs: number;
   maxConcurrent: number;
   slotFilter: string;
+  /** Surface kind of the chosen parameter. Disambiguates a name shared across surfaces. */
+  slotKind: string;
   /** Measure the redirect target rather than the 3xx. Same-origin hops only. */
   followRedirects: boolean;
   maxRedirectHops: number;
@@ -75,6 +78,7 @@ const DEFAULTS: Settings = {
   delayMs: 25,
   maxConcurrent: 4,
   slotFilter: "",
+  slotKind: "",
   // Off by default: it doubles the request count on any endpoint that redirects, and that is the
   // operator's call to make per target rather than something to spend silently.
   followRedirects: false,
@@ -541,15 +545,87 @@ export function init(sdk: App): void {
       };
     };
 
-    const slot = el("input");
-    slot.type = "text";
-    slot.placeholder = "all parameters";
-    slot.value = tab.settings.slotFilter;
+    /**
+     * The parameter picker.
+     *
+     * Populated from the backend, because enumeration needs the raw request bytes and only the backend
+     * can fetch them. Starts as a one-option select saying so: a picker that appears empty is
+     * indistinguishable from a request with nothing injectable.
+     */
+    const slot = el("select");
     styleControl(slot);
-    slot.style.width = "180px";
-    slot.onchange = () => {
-      tab.settings = { ...tab.settings, slotFilter: slot.value.trim() };
+    slot.style.maxWidth = "420px";
+
+    const slotOption = (label: string, value: string): HTMLOptionElement => {
+      const option = el("option", label) as HTMLOptionElement;
+      option.value = value;
+      // The OS popup ignores inherited colour, so options are painted directly.
+      option.style.background = T.bg;
+      option.style.color = T.fg;
+      return option;
     };
+
+    // Value encoding: "" is all parameters, otherwise "kind name". The kind travels with the name
+    // because names are not unique across surfaces -- `?q=` and a body `q=` are both "q".
+    const setSlotOptions = (summary?: RequestSummary): void => {
+      slot.replaceChildren();
+      slot.append(slotOption("all parameters", ""));
+      for (const s of summary?.slots ?? []) {
+        const shown =
+          s.preview === ""
+            ? `${s.name}  [${s.kind}]`
+            : `${s.name} = ${s.preview}  [${s.kind}]`;
+        slot.append(slotOption(shown, `${s.kind} ${s.name}`));
+      }
+      const wanted =
+        tab.settings.slotFilter === ""
+          ? ""
+          : `${tab.settings.slotKind} ${tab.settings.slotFilter}`;
+      // Only re-select a remembered choice if this request actually has it.
+      slot.value = Array.from(slot.options).some((o) => o.value === wanted) ? wanted : "";
+      if (slot.value === "") {
+        tab.settings = { ...tab.settings, slotFilter: "", slotKind: "" };
+      }
+    };
+
+    slot.onchange = () => {
+      const [kind, name] = slot.value === "" ? ["", ""] : slot.value.split(" ");
+      tab.settings = { ...tab.settings, slotFilter: name ?? "", slotKind: kind ?? "" };
+    };
+
+    setSlotOptions();
+
+    /** Body shape, deferred surfaces, and parse errors: why an expected parameter is not listed. */
+    const surfaceNote = el("div", undefined, "opacity:0.7;font-size:11px;margin:2px 0 0 128px;");
+
+    void (async () => {
+      const result = await sdk.backend.inspectRequest(tab.target.requestId);
+      if (result.kind === "error") {
+        // Say it plainly. Silently leaving "all parameters" would let a scan run against a request the
+        // parser could not read, and report nothing found.
+        slot.replaceChildren();
+        slot.append(slotOption("could not read this request", ""));
+        surfaceNote.textContent = result.error;
+        surfaceNote.style.color = T.danger;
+        return;
+      }
+      const summary = result.value;
+      setSlotOptions(summary);
+
+      const notes: string[] = [
+        `${summary.slots.length} injectable parameter(s) on this ${summary.method} request`,
+      ];
+      if (summary.bodyLength > 0) {
+        notes.push(`body ${summary.bodyLength} bytes${summary.contentType === undefined ? "" : ` (${summary.contentType})`}`);
+      }
+      if (summary.slots.length === 0) {
+        notes.push("nothing to scan: no parameter on this request is injectable yet");
+      }
+      for (const d of summary.deferred) notes.push(`not injectable — ${d.kind}: ${d.reason}`);
+      surfaceNote.textContent = notes.join(". ");
+      surfaceNote.style.color =
+        summary.slots.length === 0 || summary.deferred.length > 0 ? T.warning : T.fgMuted;
+    })();
 
     const budgetHint = (["low", "medium", "high"] as const)
       .map((level) => {
@@ -569,7 +645,9 @@ export function init(sdk: App): void {
           "back-to-back, so this is how many pairs overlap, not how many requests split a pair.",
       ),
     );
-    fields.append(row("parameter", slot, "leave empty to scan every enumerated surface"));
+    const slotRow = row("parameter", slot, undefined);
+    slotRow.append(surfaceNote);
+    fields.append(slotRow);
 
     // ---- Where the result is measured ----
     // Template injection often renders somewhere other than where it was injected. These two options
@@ -791,7 +869,12 @@ export function init(sdk: App): void {
       aggressivity: tab.settings.aggressivity,
       delayMs: tab.settings.delayMs,
       maxConcurrent: tab.settings.maxConcurrent,
-      ...(tab.settings.slotFilter === "" ? {} : { slotFilter: tab.settings.slotFilter }),
+      ...(tab.settings.slotFilter === ""
+        ? {}
+        : {
+            slotFilter: tab.settings.slotFilter,
+            ...(tab.settings.slotKind === "" ? {} : { slotKind: tab.settings.slotKind }),
+          }),
       ...(tab.settings.followRedirects
         ? { followRedirects: true, maxRedirectHops: tab.settings.maxRedirectHops }
         : {}),
