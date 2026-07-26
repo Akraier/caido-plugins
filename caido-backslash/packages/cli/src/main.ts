@@ -176,6 +176,7 @@ async function main(): Promise<void> {
       target: { host: args.host, port: args.port, tls: args.tls },
       transport,
       random,
+      pairConcurrency: args.concurrency,
     },
     { onFinding: printFinding, onDiagnostic: printDiagnostic },
   );

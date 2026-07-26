@@ -212,6 +212,9 @@ async function runScan(sdk: BackendSDK, scanId: string, input: ScanRequestInput)
         },
         transport: active.transport,
         random,
+        // Same knob governs both: each pair holds at most one in-flight request, so the number of
+        // concurrent pairs is what actually determines how many requests are in flight.
+        pairConcurrency: Math.max(1, input.maxConcurrent),
         cancelled: () => active.cancelled,
       },
       {

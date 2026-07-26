@@ -57,8 +57,11 @@ const LOG_VIEW_CAP = 500;
 
 const DEFAULTS: Settings = {
   aggressivity: "medium",
-  delayMs: 150,
-  maxConcurrent: 2,
+  // 150ms was far too conservative once it became clear the suite was fully sequential: throughput
+  // was pinned at 1/(latency + gap) with nothing in flight alongside. Pairs now run concurrently, so
+  // a small gap plus real concurrency gives a usable rate while still pacing the target.
+  delayMs: 25,
+  maxConcurrent: 4,
   slotFilter: "",
 };
 
@@ -361,8 +364,15 @@ export function init(sdk: App): void {
     form.append(
       row("aggressivity", aggressivity, "probe and parameter budget: low 4, medium 12, high all 24"),
     );
-    form.append(row("delay ms", delay, "minimum gap between requests"));
-    form.append(row("concurrency", concurrency, "requests in flight at once"));
+    form.append(row("delay ms", delay, "minimum gap between the START of one request and the next"));
+    form.append(
+      row(
+        "concurrency",
+        concurrency,
+        "independent probe pairs in flight at once. The two arms of a pair are always sent " +
+          "back-to-back, so this is how many pairs overlap, not how many requests split a pair.",
+      ),
+    );
     form.append(row("parameter", slot, "leave empty to scan every enumerated surface"));
 
     // Not a choice: every request is saved. Stated so the volume is not a surprise.

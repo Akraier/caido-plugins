@@ -17,6 +17,9 @@ import { createServer } from "node:http";
 const port = Number.parseInt(process.argv[2] ?? "8099", 10);
 const MODE = process.env.MODE ?? "vulnerable";
 
+/** Simulated round-trip latency, so concurrency can be measured against something realistic. */
+const LATENCY_MS = Number.parseInt(process.env.LATENCY_MS ?? "0", 10);
+
 const server = createServer((req, res) => {
   const url = new URL(req.url ?? "/", `http://localhost:${port}`);
   const q = url.searchParams.get("q") ?? "";
@@ -31,8 +34,12 @@ const server = createServer((req, res) => {
   const nonce = Math.random().toString(36).slice(2, 10);
 
   const send = (status: number, body: string): void => {
-    res.writeHead(status, { "Content-Type": "text/html; charset=utf-8" });
-    res.end(body);
+    const write = (): void => {
+      res.writeHead(status, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(body);
+    };
+    if (LATENCY_MS > 0) setTimeout(write, LATENCY_MS);
+    else write();
   };
 
   switch (MODE) {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { runSuite } from "../src/detect/runner.ts";
+import { runSuite, type SuiteSummary } from "../src/detect/runner.ts";
 import { ALL_STATIC_PROBES, DELIMITER_PROBES } from "../src/probes/catalogue.ts";
 import { enumerateSlots } from "../src/request/slots.ts";
 import { asciiBytes, locate } from "../src/request/template.ts";
@@ -206,5 +206,114 @@ describe("ERB and EJS template injection", () => {
     const lengths = new Set([...probe.breaks, ...probe.escapeSets.flat()].map((p) => p.length));
     expect([...lengths]).toEqual([10]);
     expect(probe.parity).toBe("equal");
+  });
+});
+
+describe("pair concurrency", () => {
+  /** Records how many provider calls were in flight simultaneously. */
+  function overlapHarness(width: number) {
+    const template = locate(asciiBytes(REQUEST));
+    const slots = enumerateSlots(template).slots.filter((s) => s.kind === "query-value");
+    let inFlight = 0;
+    let peak = 0;
+    let time = 0;
+
+    const transport = createProbeTransport(
+      {
+        provider: {
+          send: async () => {
+            inFlight += 1;
+            peak = Math.max(peak, inFlight);
+            // A macrotask, not a microtask: every worker must be able to reach its own send before
+            // the first one resolves, otherwise the harness measures its own setup latency rather
+            // than the suite's concurrency.
+            await new Promise<void>((resolve) => setTimeout(resolve, 0));
+            inFlight -= 1;
+            return respond(200, "<html><body>static</body></html>");
+          },
+        },
+        sleep: async (ms: number) => {
+          time += ms;
+          await Promise.resolve();
+        },
+        now: () => time,
+      },
+      { ...DEFAULT_THROTTLE, minDelayMs: 0, maxConcurrent: 8, haltMinObservations: 1000 },
+    );
+
+    return {
+      peak: () => peak,
+      run: () =>
+        runSuite({
+          template,
+          slots,
+          probes: DELIMITER_PROBES,
+          target: { host: "shop.test", port: 443, tls: true },
+          transport,
+          random: () => 0.5,
+          pairConcurrency: width,
+        }),
+    };
+  }
+
+  it("sends one request at a time when concurrency is one", async () => {
+    const h = overlapHarness(1);
+    await h.run();
+    expect(h.peak()).toBe(1);
+  });
+
+  it("overlaps independent pairs when concurrency is raised", async () => {
+    // The bug this guards: the suite loop was a plain nested await, so only ever one request was in
+    // flight and the transport's concurrency cap did nothing. Throughput was pinned at
+    // 1/(latency + gap), which is why only the delay knob appeared to matter.
+    const h = overlapHarness(4);
+    await h.run();
+    expect(h.peak()).toBeGreaterThan(1);
+  });
+
+  it("produces identical results at any concurrency, given the same seed", async () => {
+    // Concurrency must not change what is found. Each pair draws from its own derived stream, so the
+    // interleaving cannot perturb any individual measurement.
+    const results: SuiteSummary[] = [];
+    for (const width of [1, 3, 5]) {
+      const template = locate(asciiBytes(REQUEST));
+      const slots = enumerateSlots(template).slots.filter((s) => s.kind === "query-value");
+      let time = 0;
+      const transport = createProbeTransport(
+        {
+          provider: {
+            send: async () => {
+              await Promise.resolve();
+              return respond(200, "<html><body>static</body></html>");
+            },
+          },
+          sleep: async (ms: number) => {
+            time += ms;
+            await Promise.resolve();
+          },
+          now: () => time,
+        },
+        { ...DEFAULT_THROTTLE, minDelayMs: 0, haltMinObservations: 1000 },
+      );
+      results.push(
+        await runSuite({
+          template,
+          slots,
+          probes: DELIMITER_PROBES,
+          target: { host: "shop.test", port: 443, tls: true },
+          transport,
+          random: () => 0.5,
+          pairConcurrency: width,
+        }),
+      );
+    }
+
+    const shape = (r: SuiteSummary) =>
+      JSON.stringify({
+        findings: r.findings.map((f) => f.probeId),
+        diagnostics: r.diagnostics.map((d) => `${d.slotName}/${d.probeId}/${d.kind}`),
+      });
+    expect(shape(results[1]!)).toBe(shape(results[0]!));
+    expect(shape(results[2]!)).toBe(shape(results[0]!));
   });
 });

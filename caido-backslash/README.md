@@ -99,6 +99,26 @@ node packages/cli/src/main.ts --request req.txt --host target.example --port 443
   --allow target.example --delay-ms 250 --concurrency 2
 ```
 
+### Pacing and throughput
+
+Two knobs, and they bound different things:
+
+- `--delay-ms` is a **global** minimum gap between request STARTS, so it caps the aggregate rate at
+  `1000/delay` requests per second no matter how much concurrency you allow. At 150 ms that is 6.7/s;
+  at 25 ms it is 40/s.
+- `--concurrency` is how many independent probe pairs run at once. The two arms of a pair are always
+  sent back to back, since their adjacency is the defence against a backend that alternates between
+  two responses; concurrency overlaps whole pairs, never the halves of one.
+
+Concurrency only helps when latency, not the gap, is the binding constraint. Measured against a
+target with 60 ms of simulated latency, `--delay-ms 0`, roughly 1000 sends:
+
+| concurrency | wall clock | rate |
+|---|---|---|
+| 1 | 57.7 s | 16 req/s |
+| 4 | 16.3 s | 62 req/s |
+| 8 | 8.6 s | 120 req/s |
+
 `--allow` is a hard allowlist enforced in the engine, not the UI. Scanning a host absent from it
 fails immediately. `--delay-ms` and `--concurrency` feed the throttle; the transport backs off on
 429 and `Retry-After`, and halts entirely once the recent window is mostly unusable rather than
