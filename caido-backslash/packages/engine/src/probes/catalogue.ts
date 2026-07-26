@@ -268,19 +268,75 @@ export const INTERPOLATION_PROBES: readonly ProbePair[] = [
     name: "Interpolation: ERB expression evaluated",
     stage: "interpolation",
     breaks: ["<%= 7/0 %>"],
-    escapeSets: [["<%= 007 %>"]],
+    escapeSets: [["<%= 7*1 %>"]],
     mode: "append",
     parity: "equal",
     anchor: true,
     weight: 8,
     wireForm: "literal-raw-percent",
     notes:
-      "Division by zero raises in Ruby and JavaScript; a padded literal does not. Leading zeros keep " +
-      "the value at 7 in both languages while making the two arms the same length.",
+      "The escape was originally <%= 007 %>, which is a SyntaxError in JavaScript strict mode and in " +
+      "Python: the escape arm would have thrown too, hiding the very difference being measured. " +
+      "7*1 is the same three characters as 7/0, evaluates to 7, and is valid in Ruby, JavaScript, " +
+      "Python, Java and Perl alike.",
   },
 ];
 
 /** Interpolation wrappers, tried in this order once the matching probe above fires. */
+/**
+ * Evaluation-confirming pairs, one per interpolation family.
+ *
+ * The delimiter probes above only ask whether an UNBALANCED tag upsets the parser. Several engines
+ * tolerate that and simply emit the text, and some applications catch template errors and return the
+ * ordinary page, so a real injection can be completely invisible to them. These pairs instead ask
+ * whether a well-formed expression is EVALUATED, which is both the stronger signal and the one that
+ * matters.
+ *
+ * `7/0` against `7*1`: identical length, one raises (ZeroDivisionError in Python and Ruby,
+ * ArithmeticException in Java) while the other yields 7. In JavaScript engines `7/0` does not throw
+ * but renders `Infinity`, which is still a clean difference. Deliberately NOT `007`, which is a
+ * SyntaxError in both Python and JavaScript strict mode and would make the escape arm throw as well.
+ */
+export const INTERPOLATION_EVAL_PROBES: readonly ProbePair[] = [
+  {
+    // Jinja2, Tornado, Twig, Handlebars, Liquid, Nunjucks.
+    id: "interp.curly-eval",
+    name: "Interpolation: curly expression evaluated",
+    stage: "interpolation",
+    breaks: ["{{ 7/0 }}"],
+    escapeSets: [["{{ 7*1 }}"]],
+    mode: "append",
+    parity: "equal",
+    anchor: true,
+    weight: 8,
+  },
+  {
+    // Freemarker, JSP EL, Spring SpEL, Thymeleaf.
+    id: "interp.dollar-eval",
+    name: "Interpolation: dollar expression evaluated",
+    stage: "interpolation",
+    breaks: ["${ 7/0 }"],
+    escapeSets: [["${ 7*1 }"]],
+    mode: "append",
+    parity: "equal",
+    anchor: true,
+    weight: 8,
+  },
+  {
+    // Struts and OGNL.
+    id: "interp.percent-eval",
+    name: "Interpolation: percent expression evaluated",
+    stage: "interpolation",
+    breaks: ["%{ 7/0 }"],
+    escapeSets: [["%{ 7*1 }"]],
+    mode: "append",
+    parity: "equal",
+    anchor: true,
+    weight: 8,
+    wireForm: "literal-raw-percent",
+  },
+];
+
 export const INTERPOLATION_WRAPPERS: Readonly<Record<string, WrapParams>> = {
   "interp.curly": { prefix: "{{", suffix: "}}" },
   "interp.dollar": { prefix: "${", suffix: "}" },
@@ -760,6 +816,7 @@ export const ALL_STATIC_PROBES: readonly ProbePair[] = [
   ...ESCAPE_SEQUENCE_PROBES,
   INTERPOLATION_TRIAGE,
   ...INTERPOLATION_PROBES,
+  ...INTERPOLATION_EVAL_PROBES,
   ...ARITHMETIC_PROBES,
   ...ORDER_BY_PROBES,
   ...PATH_PROBES,

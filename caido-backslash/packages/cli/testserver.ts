@@ -63,6 +63,35 @@ const server = createServer((req, res) => {
       );
       return;
 
+    case "tornado": {
+      // A Tornado/Jinja-style engine that TOLERATES an unbalanced delimiter: an unclosed {{ is
+      // emitted as literal text rather than raising. This is the case that defeats a probe which only
+      // tests unbalanced delimiters, and it is why an evaluation probe is needed.
+      const expression = /\{\{\s*([^}]*?)\s*\}\}/.exec(payload);
+      if (expression !== null) {
+        const source = expression[1] ?? "";
+        if (/^[0-9+\-*/() ]+$/.test(source)) {
+          if (/\/\s*0+(?![1-9])/.test(source)) {
+            send(500, "<html><body><div>ZeroDivisionError: division by zero</div></body></html>");
+            return;
+          }
+          let rendered: string;
+          try {
+            rendered = String(Function(`"use strict";return (${source})`)());
+          } catch {
+            // A literal Python would reject leading zeros here; mirror that.
+            send(500, "<html><body><div>SyntaxError in template expression</div></body></html>");
+            return;
+          }
+          send(200, `<html><body><p>Hello ${rendered}</p><div>3 results</div></body></html>`);
+          return;
+        }
+      }
+      // Anything else, including an unclosed tag, is inert literal text.
+      send(200, `<html><body>${echo}<div>3 results</div></body></html>`);
+      return;
+    }
+
     case "erb": {
       // A minimal ERB-like template engine: the value is interpolated into a template and rendered.
       // Unbalanced tags raise a parse error; a well-formed expression is evaluated.

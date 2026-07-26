@@ -377,7 +377,7 @@ describe("percent-significant payloads reach the server intact", () => {
     const evalProbe = ALL_STATIC_PROBES.find((p) => p.id === "interp.erb-eval")!;
     // Space still has to be encoded: it would truncate the parameter otherwise.
     expect(encodeWith(evalProbe, "<%= 7/0 %>")).toBe("<%=%207/0%20%>");
-    expect(encodeWith(evalProbe, "<%= 007 %>")).toBe("<%=%20007%20%>");
+    expect(encodeWith(evalProbe, "<%= 7*1 %>")).toBe("<%=%207*1%20%>");
   });
 
   it("keeps the Struts/OGNL percent-brace form raw", () => {
@@ -406,5 +406,32 @@ describe("percent-significant payloads reach the server intact", () => {
     const ids = ALL_STATIC_PROBES.map((p) => p.id);
     expect(ids).toContain("interp.erb");
     expect(ids).toContain("interp.erb-eval");
+  });
+
+  it("pairs every interpolation family with an evaluation probe", () => {
+    // A delimiter probe only asks whether an unbalanced tag upsets the parser. Engines that tolerate
+    // that, or applications that swallow template errors, are invisible to it -- which is how a
+    // Tornado lab went undetected with interp.curly present and passing.
+    const ids = ALL_STATIC_PROBES.map((p) => p.id);
+    for (const family of ["curly", "dollar", "percent", "erb"]) {
+      expect(ids, family).toContain(`interp.${family}`);
+      expect(ids, family).toContain(`interp.${family}-eval`);
+    }
+  });
+
+  it("never uses a leading-zero literal in a template-expression payload", () => {
+    // 007 is a SyntaxError in Python and in JavaScript strict mode, so an escape arm built from it
+    // would throw exactly like the break arm and hide the difference being measured. 7*1 is valid in
+    // every language these probes target.
+    //
+    // Scoped to the interpolation stage on purpose. The arithmetic family appends /01 and -00 to a
+    // numeric parameter, which is fine in the SQL integer contexts it aims at, even though it too
+    // would be a SyntaxError were a Python expression evaluator on the other end. Worth knowing as a
+    // latent limitation of that family rather than asserting against it here.
+    for (const probe of ALL_STATIC_PROBES.filter((p) => p.stage === "interpolation")) {
+      for (const payload of [...probe.breaks, ...probe.escapeSets.flat()]) {
+        expect(payload, probe.id).not.toMatch(/\b0[0-9]+\b/);
+      }
+    }
   });
 });
