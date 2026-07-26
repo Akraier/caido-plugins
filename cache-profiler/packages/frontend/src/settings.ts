@@ -26,11 +26,25 @@ function row(label: string, control: HTMLElement): HTMLElement {
   return wrap;
 }
 
-// Explicit control colors — native select/option otherwise render with the browser default
-// white background while inheriting Caido's light text, giving unreadable white-on-white.
-const CTRL_BG = "#1e1e2a";
-const CTRL_FG = "#e6e6e6";
-const CTRL_BORDER = "1px solid #4a4a5a";
+/**
+ * Caido theme tokens, with fallbacks.
+ *
+ * These replace hardcoded hex. Native select and option elements otherwise render with the browser
+ * default white background while inheriting Caido's light text, giving unreadable white-on-white --
+ * but pinning them to fixed dark hex only moves the problem to whoever runs the light theme. Tokens
+ * follow whatever the host is actually using.
+ */
+const T = {
+  fg: "var(--c-fg-default, #e6e6e6)",
+  fgMuted: "var(--c-fg-secondary, #8b949e)",
+  bg: "var(--c-bg-default, #1e1e2a)",
+  border: "var(--c-border, #4a4a5a)",
+  success: "var(--c-success, #3fb950)",
+} as const;
+
+const CTRL_BG = T.bg;
+const CTRL_FG = T.fg;
+const CTRL_BORDER = `1px solid ${T.border}`;
 
 function styleControl(el: HTMLElement): void {
   el.style.padding = "4px 8px";
@@ -38,7 +52,10 @@ function styleControl(el: HTMLElement): void {
   el.style.color = CTRL_FG;
   el.style.border = CTRL_BORDER;
   el.style.borderRadius = "4px";
-  el.style.colorScheme = "dark"; // render the native dropdown chrome dark too
+  // Native dropdown POPUPS are browser chrome and cannot be themed by CSS variables, so this hint
+  // is kept rather than tokenised. Deliberate trade-off: under Caido's light theme the popup stays
+  // dark, which is jarring but readable, whereas dropping it risks the original white-on-white.
+  el.style.colorScheme = "dark";
 }
 
 function select(options: string[], value: string): HTMLSelectElement {
@@ -65,12 +82,22 @@ function input(type: string, value: string): HTMLInputElement {
   return i;
 }
 
+/**
+ * An outlined button styled from theme tokens.
+ *
+ * The previous version set padding and cursor but neither `background` nor `color`, so the label
+ * took the user-agent default `buttontext` -- near-black -- against Caido's dark chrome, which is
+ * unreadable. Outlined rather than filled on purpose: a fill forces you to choose a contrasting
+ * foreground, and that choice is what breaks when the host theme changes.
+ */
 function button(label: string, primary = false): HTMLButtonElement {
   const b = document.createElement("button");
   b.textContent = label;
-  b.style.padding = primary ? "8px 20px" : "6px 12px";
-  b.style.cursor = "pointer";
-  if (primary) b.style.fontWeight = "600";
+  const accent = primary ? T.success : T.fgMuted;
+  b.style.cssText =
+    `padding:${primary ? "8px 20px" : "6px 12px"};cursor:pointer;border-radius:4px;` +
+    `background:transparent;color:${accent};border:1px solid ${accent};` +
+    (primary ? "font-weight:600;" : "");
   return b;
 }
 
@@ -90,15 +117,13 @@ export function mountSettingsPage(sdk: FrontendSDK): void {
   status.style.padding = "10px 12px";
   status.style.borderRadius = "6px";
   status.style.background = "rgba(127,127,127,0.12)";
+  status.style.color = T.fg;
   status.style.fontFamily = "monospace";
   status.style.whiteSpace = "pre-wrap";
   status.textContent = "status: loading…";
 
-  const resumeBtn = document.createElement("button");
-  resumeBtn.textContent = "Resume (clear throttle halt)";
+  const resumeBtn = button("Resume (clear throttle halt)");
   resumeBtn.style.margin = "0 0 16px";
-  resumeBtn.style.padding = "6px 12px";
-  resumeBtn.style.cursor = "pointer";
   resumeBtn.addEventListener("click", () => {
     void sdk.backend.resumeConfirm().then(() => {
       sdk.window.showToast("Confirmation resumed", { variant: "info" });
@@ -139,6 +164,7 @@ export function mountSettingsPage(sdk: FrontendSDK): void {
   oobStatus.style.padding = "10px 12px";
   oobStatus.style.borderRadius = "6px";
   oobStatus.style.background = "rgba(127,127,127,0.12)";
+  oobStatus.style.color = T.fg;
   oobStatus.style.fontFamily = "monospace";
   oobStatus.style.whiteSpace = "pre-wrap";
   oobStatus.textContent = "oob: loading…";

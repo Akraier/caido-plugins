@@ -9,7 +9,13 @@
  *    fix is a tab per scan and a strict `scanId` lookup: an event for an unknown scan is dropped
  *    rather than sprayed into whichever tab happens to be visible.
  *
- * 2. **Nothing is sent until the operator presses Start.** Previously the context menu fired a scan
+ * 2. **Buttons and colours come from Caido, not from hardcoded hex.** Buttons are built with
+ *    `sdk.ui.button`, which is themed by the host, and every colour that remains is a
+ *    `var(--c-*)` token with a fallback. Hand-styling a `<button>` with a dark `background` and no
+ *    `color` was unreadable in dark mode: the user-agent default `color: buttontext` is near-black
+ *    and beats theme inheritance, so the label vanished into the background.
+ *
+ * 3. **Nothing is sent until the operator presses Start.** Previously the context menu fired a scan
  *    immediately using whatever settings were persisted from last time, which is the wrong default
  *    for a tool that sends hundreds of requests at a third-party target. Selecting a request now
  *    opens a pending tab showing what will be scanned, with the settings editable, and the traffic
@@ -107,6 +113,53 @@ function el<K extends keyof HTMLElementTagNameMap>(
 
 const MONO = "font-family:monospace;font-size:12px;";
 
+/**
+ * Caido theme tokens, with fallbacks for the case where a token is absent.
+ *
+ * Never hardcode a foreground or background: the host themes both, and a fixed hex is wrong in at
+ * least one of light and dark mode.
+ */
+const T = {
+  fg: "var(--c-fg-default, #e6edf3)",
+  fgMuted: "var(--c-fg-secondary, #8b949e)",
+  border: "var(--c-border, #30363d)",
+  surface: "var(--c-bg-subtle, rgba(127,127,127,0.10))",
+  danger: "var(--c-danger, #f85149)",
+  warning: "var(--c-warning, #d29922)",
+  success: "var(--c-success, #3fb950)",
+} as const;
+
+/**
+ * Button styling, from theme tokens only.
+ *
+ * Outlined rather than filled, deliberately. A filled button forces you to pick a foreground that
+ * contrasts with your chosen background, and that pairing is what breaks when the host switches
+ * theme. An outlined button sets `color` explicitly and leaves the background transparent, so it
+ * inherits whatever the host is actually using and cannot become invisible.
+ *
+ * Setting `color` is the part that was missing: a `<button>` carries the user-agent default
+ * `color: buttontext`, which is near-black and beats inherited theme colour. A dark custom
+ * background with no explicit colour therefore renders black-on-dark.
+ */
+function buttonStyle(kind: "primary" | "neutral" | "danger", active = true): string {
+  const accent = kind === "danger" ? T.danger : kind === "primary" ? T.success : T.fgMuted;
+  return (
+    "padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px;background:transparent;" +
+    `color:${active ? accent : T.fgMuted};border:1px solid ${active ? accent : T.border};` +
+    (kind === "neutral" ? "" : "font-weight:600;")
+  );
+}
+
+/** A tab or view-toggle: state shown by weight and an accent underline, never by a fill. */
+function toggleStyle(active: boolean): string {
+  return (
+    "padding:4px 10px;border-radius:4px 4px 0 0;cursor:pointer;font-size:12px;" +
+    `background:transparent;color:${active ? T.fg : T.fgMuted};` +
+    `border:1px solid ${T.border};border-bottom:2px solid ${active ? T.success : "transparent"};` +
+    (active ? "font-weight:600;" : "")
+  );
+}
+
 function loadDefaults(sdk: App): Settings {
   try {
     const stored = (sdk.storage.get() as Record<string, unknown> | undefined)?.[STORAGE_KEY];
@@ -125,16 +178,16 @@ function saveDefaults(sdk: App, settings: Settings): void {
 }
 
 function confidenceBadge(confidence: string): HTMLElement {
-  const palette: Record<string, string> = {
-    firm: "background:#7f1d1d;color:#fecaca;",
-    probable: "background:#78350f;color:#fde68a;",
-    tentative: "background:#374151;color:#d1d5db;",
-  };
+  // Colour the TEXT and the border rather than filling a background. A filled badge needs a
+  // foreground chosen to contrast with it, which is exactly the guess that breaks under a theme
+  // change; an outlined badge inherits the theme's own foreground and cannot go unreadable.
+  const accent =
+    confidence === "firm" ? T.danger : confidence === "probable" ? T.warning : T.fgMuted;
   return el(
     "span",
     confidence.toUpperCase(),
     "display:inline-block;padding:1px 6px;border-radius:3px;font-size:11px;font-weight:600;" +
-      (palette[confidence] ?? palette["tentative"]!),
+      `color:${accent};border:1px solid ${accent};`,
   );
 }
 
@@ -142,7 +195,7 @@ function renderFinding(finding: ScanFinding): HTMLElement {
   const card = el(
     "div",
     undefined,
-    `border:1px solid #374151;border-radius:4px;padding:10px;margin-bottom:10px;${MONO}`,
+    `border:1px solid ${T.border};border-radius:4px;padding:10px;margin-bottom:10px;${MONO}`,
   );
 
   const head = el("div", undefined, "display:flex;gap:8px;align-items:center;margin-bottom:6px;");
@@ -188,10 +241,10 @@ function renderFinding(finding: ScanFinding): HTMLElement {
 function renderSend(entry: SendLogEntry): HTMLElement {
   const colour =
     entry.outcome === "usable"
-      ? "opacity:0.85;"
+      ? `color:${T.fgMuted};`
       : entry.outcome === "soft-fail"
-        ? "color:#fde68a;"
-        : "color:#fca5a5;font-weight:600;";
+        ? `color:${T.warning};`
+        : `color:${T.danger};font-weight:600;`;
 
   const time = new Date(entry.atMs).toISOString().slice(11, 23);
   const status = entry.status === undefined ? "---" : String(entry.status);
@@ -222,7 +275,7 @@ export function init(sdk: App): void {
   const tabBar = el(
     "div",
     undefined,
-    "display:flex;gap:4px;flex-wrap:wrap;margin-bottom:10px;border-bottom:1px solid #374151;padding-bottom:8px;",
+    `display:flex;gap:4px;flex-wrap:wrap;margin-bottom:10px;border-bottom:1px solid ${T.border};padding-bottom:8px;`,
   );
   const paneHost = el("div", undefined, "flex:1;overflow:auto;");
   const emptyState = el(
@@ -237,8 +290,7 @@ export function init(sdk: App): void {
     activeTab = tab;
     for (const other of tabs) {
       other.pane.style.display = other === tab ? "block" : "none";
-      other.tabButton.style.background = other === tab ? "#1f2937" : "transparent";
-      other.tabButton.style.fontWeight = other === tab ? "600" : "400";
+      other.tabButton.style.cssText = toggleStyle(other === tab);
     }
   }
 
@@ -289,7 +341,7 @@ export function init(sdk: App): void {
     const summary = el(
       "div",
       undefined,
-      "border:1px solid #374151;border-radius:4px;padding:10px;margin-bottom:12px;",
+      `border:1px solid ${T.border};border-radius:4px;padding:10px;margin-bottom:12px;`,
     );
     summary.append(el("div", "target", "opacity:0.7;margin-bottom:4px;"));
     summary.append(
@@ -299,7 +351,7 @@ export function init(sdk: App): void {
           (tab.target.query === "" ? "" : `?${tab.target.query}`),
       ),
     );
-    summary.append(el("div", `request #${tab.target.requestId}`, "opacity:0.7;margin-top:4px;"));
+    summary.append(el("div", `request #${tab.target.requestId}`, "color:{T.fgMuted};margin-top:4px;"));
     form.append(summary);
 
     const row = (label: string, control: HTMLElement, hint?: string): HTMLElement => {
@@ -398,18 +450,17 @@ export function init(sdk: App): void {
           "div",
           `A scan is already running against ${tab.target.host}. Each scan throttles independently, ` +
             "so the combined request rate will be the sum of both.",
-          "border:1px solid #78350f;background:#1c1917;color:#fde68a;border-radius:4px;padding:8px;margin-bottom:10px;font-size:11px;",
+          `border:1px solid ${T.warning};color:${T.warning};background:transparent;` +
+            "border-radius:4px;padding:8px;margin-bottom:10px;font-size:11px;",
         ),
       );
     }
 
     const actions = el("div", undefined, "display:flex;gap:8px;align-items:center;");
     const startButton = el("button", "Start scan");
-    startButton.style.cssText =
-      "padding:5px 14px;border-radius:4px;border:1px solid #4b5563;background:#1f2937;cursor:pointer;font-weight:600;";
+    startButton.style.cssText = buttonStyle("primary");
     const rememberButton = el("button", "Save as defaults");
-    rememberButton.style.cssText =
-      "padding:5px 10px;border-radius:4px;border:1px solid #374151;background:transparent;cursor:pointer;";
+    rememberButton.style.cssText = buttonStyle("neutral");
     rememberButton.onclick = () => {
       defaults = { ...tab.settings };
       saveDefaults(sdk, defaults);
@@ -455,7 +506,7 @@ export function init(sdk: App): void {
     tab.statusLine.style.display = "block";
     tab.statusLine.textContent = `${tab.scanId} starting`;
     tab.viewToggle.style.display = "flex";
-    tab.stopButton.style.display = "inline-block";
+    tab.stopButton.style.cssText = `display:inline-block;${buttonStyle("danger")}`;
     tab.findingsBox.style.display = "block";
   }
 
@@ -464,8 +515,7 @@ export function init(sdk: App): void {
     emptyState.remove();
 
     const tabButton = el("button");
-    tabButton.style.cssText =
-      "padding:4px 10px;border-radius:4px 4px 0 0;border:1px solid #374151;border-bottom:none;background:transparent;cursor:pointer;font-size:12px;";
+    tabButton.style.cssText = toggleStyle(false);
 
     const closeButton = el("span", " x", "margin-left:6px;opacity:0.6;");
 
@@ -477,8 +527,7 @@ export function init(sdk: App): void {
     );
     const statusLine = el("div", undefined, `${MONO}opacity:0.85;display:none;flex:1;`);
     const stopButton = el("button", "Stop");
-    stopButton.style.cssText =
-      "display:none;padding:3px 12px;border-radius:4px;border:1px solid #7f1d1d;background:#450a0a;color:#fecaca;cursor:pointer;font-size:11px;font-weight:600;";
+    stopButton.style.cssText = `display:none;${buttonStyle("danger")}`;
     statusRow.append(statusLine, stopButton);
     const viewToggle = el("div", undefined, "display:none;gap:6px;margin-bottom:8px;");
     const findingsBox = el("div", undefined, "display:none;");
@@ -506,9 +555,6 @@ export function init(sdk: App): void {
     // "what did you actually send". Both matter, so they are peers rather than one nested in the other.
     const showFindings = el("button", "Findings");
     const showLog = el("button", "Requests");
-    const toggleStyle = (active: boolean): string =>
-      "padding:3px 10px;border-radius:3px;border:1px solid #374151;cursor:pointer;font-size:11px;" +
-      (active ? "background:#1f2937;font-weight:600;" : "background:transparent;");
     const setView = (view: "findings" | "requests"): void => {
       findingsBox.style.display = view === "findings" ? "block" : "none";
       logBox.style.display = view === "requests" ? "block" : "none";
