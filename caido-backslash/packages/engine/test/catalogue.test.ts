@@ -2,6 +2,15 @@ import { describe, expect, it } from "vitest";
 
 import {
   ALL_STATIC_PROBES,
+  ARITHMETIC_PROBES,
+  DELIMITER_FALLBACK_PROBES,
+  DELIMITER_PROBES,
+  ESCAPE_SEQUENCE_PROBES,
+  INTERPOLATION_EVAL_PROBES,
+  INTERPOLATION_PROBES,
+  INTERPOLATION_TRIAGE,
+  ORDER_BY_PROBES,
+  PATH_PROBES,
   CONCATENATION_TEMPLATE,
   CONCATENATORS,
   JSON_KEY_TEMPLATE,
@@ -15,6 +24,7 @@ import {
   corruptMagicValue,
 } from "../src/probes/catalogue.ts";
 import { equalisePair, padNumericLiteral, padWithFiller } from "../src/probes/pad.ts";
+import { AGGRESSIVITY_BUDGET } from "../../shared/src/api.ts";
 import { QUERY_VALUE_CODEC } from "../src/request/codecs.ts";
 import { asciiBytes as bytes } from "../src/request/template.ts";
 import type { ProbePair } from "../src/probes/types.ts";
@@ -433,5 +443,76 @@ describe("percent-significant payloads reach the server intact", () => {
         expect(payload, probe.id).not.toMatch(/\b0[0-9]+\b/);
       }
     }
+  });
+});
+
+describe("aggressivity budget", () => {
+  it("is monotonic: high spends at least as much as medium, and medium at least low", () => {
+    // The operator reported that "high" appeared to probe less than expected. The mapping itself is
+    // not inverted, and this pins that down so a future edit cannot invert it silently.
+    const probeCount = (level: "low" | "medium" | "high"): number =>
+      AGGRESSIVITY_BUDGET[level].probes ?? ALL_STATIC_PROBES.length;
+
+    expect(probeCount("low")).toBeLessThan(probeCount("medium"));
+    expect(probeCount("medium")).toBeLessThan(probeCount("high"));
+    expect(AGGRESSIVITY_BUDGET.low.slots).toBeLessThan(AGGRESSIVITY_BUDGET.medium.slots);
+    expect(AGGRESSIVITY_BUDGET.medium.slots).toBeLessThan(AGGRESSIVITY_BUDGET.high.slots);
+  });
+
+  it("spends the WHOLE catalogue at high, however many probes it grows to", () => {
+    // Previously the backend hardcoded ALL_STATIC_PROBES.length and the UI hint hardcoded 24, so the
+    // hint went stale the moment the catalogue grew to 28. null means "all", by construction.
+    expect(AGGRESSIVITY_BUDGET.high.probes).toBeNull();
+  });
+
+  it("keeps EVERY evaluation probe reachable at medium", () => {
+    // The bug this guards, and it is a serious one: the catalogue was grouped by family with new
+    // probes appended, so all four evaluation probes sat past position twelve. At the DEFAULT medium
+    // setting none of them ran, and a Tornado template injection was undetectable however good the
+    // probe was. Appending to ALL_STATIC_PROBES is a silent coverage regression.
+    const evalIds = ALL_STATIC_PROBES.map((p) => p.id).filter((id) => id.endsWith("-eval"));
+    expect(evalIds.length).toBeGreaterThan(0);
+    const mediumSlice = ALL_STATIC_PROBES.slice(0, AGGRESSIVITY_BUDGET.medium.probes ?? undefined);
+    const reachable = mediumSlice.filter((p) => p.id.endsWith("-eval")).map((p) => p.id);
+    expect(reachable.sort()).toEqual([...evalIds].sort());
+  });
+
+  it("leads with the canonical backslash pair, the cheapest broad detector", () => {
+    expect(ALL_STATIC_PROBES[0]!.id).toBe("delim.backslash");
+  });
+
+  it("puts firewall-fingerprint probes last, since they find nothing", () => {
+    // html-tag-strip and html-comment exist to explain away a comment-injection hit. Spending an
+    // early slot on them costs real coverage.
+    const ids = ALL_STATIC_PROBES.map((p) => p.id);
+    for (const fingerprint of ["orderby.html-tag-strip", "orderby.html-comment"]) {
+      expect(ids.indexOf(fingerprint)).toBeGreaterThan(ids.length - 4);
+    }
+  });
+
+  it("reaches at least one probe from every major family at medium", () => {
+    const mediumSlice = ALL_STATIC_PROBES.slice(0, AGGRESSIVITY_BUDGET.medium.probes ?? undefined);
+    const stages = new Set(mediumSlice.map((p) => p.stage));
+    for (const stage of ["delimiter", "interpolation", "arithmetic"]) {
+      expect(stages, stage).toContain(stage);
+    }
+  });
+
+  it("contains every probe exactly once after reordering", () => {
+    // Reordering by hand risks dropping or duplicating an entry.
+    const ids = ALL_STATIC_PROBES.map((p) => p.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    const declared = [
+      ...DELIMITER_PROBES,
+      ...DELIMITER_FALLBACK_PROBES,
+      ...ESCAPE_SEQUENCE_PROBES,
+      INTERPOLATION_TRIAGE,
+      ...INTERPOLATION_PROBES,
+      ...INTERPOLATION_EVAL_PROBES,
+      ...ARITHMETIC_PROBES,
+      ...ORDER_BY_PROBES,
+      ...PATH_PROBES,
+    ].map((p) => p.id);
+    expect(ids.slice().sort()).toEqual(declared.slice().sort());
   });
 });

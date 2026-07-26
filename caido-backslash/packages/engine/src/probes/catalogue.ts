@@ -809,15 +809,41 @@ export const TRANSFORM_METACHARACTERS: readonly string[] = [
 // Invariants
 // ---------------------------------------------------------------------------------------
 
-/** Every static pair in the catalogue, for iteration and validation. */
+/**
+ * Every static pair, ORDERED BY EXPECTED YIELD. This order is behaviour, not presentation.
+ *
+ * Aggressivity spends a prefix of this list -- `slice(0, n)` -- so whatever sits at the end is the
+ * first thing dropped. The list was previously grouped by family with new probes appended, which put
+ * all four evaluation probes past position twelve: at the DEFAULT medium setting they never ran, so a
+ * Tornado template injection was undetectable no matter how good the probe was. Appending to this
+ * array is therefore a silent coverage regression, and the tests assert the invariants below.
+ *
+ * The ordering principle is cheap-and-broad first, then high-confidence confirmations, then narrow
+ * or merely diagnostic probes last:
+ *
+ *  1. The canonical backslash pair. Two sends when boring, and it applies to every interpreter.
+ *  2. The two commonest string delimiters.
+ *  3. All four evaluation probes. Highest confidence in the catalogue, and they detect the engines
+ *     that tolerate an unbalanced delimiter, which the delimiter probes cannot.
+ *  4. Interpolation delimiters, for engines that do reject an unbalanced tag.
+ *  5. Numeric contexts, where blind SQL injection lives and no quote is involved.
+ *  6. Remaining delimiters and escape-sequence probes.
+ *  7. Order-by and path families.
+ *  8. Firewall-fingerprint probes last: they classify a false positive, they do not find anything.
+ */
 export const ALL_STATIC_PROBES: readonly ProbePair[] = [
-  ...DELIMITER_PROBES,
-  ...DELIMITER_FALLBACK_PROBES,
-  ...ESCAPE_SEQUENCE_PROBES,
-  INTERPOLATION_TRIAGE,
-  ...INTERPOLATION_PROBES,
+  DELIMITER_PROBES[0]!, // delim.backslash
+  DELIMITER_PROBES[1]!, // delim.apostrophe
+  DELIMITER_PROBES[2]!, // delim.doublequote
   ...INTERPOLATION_EVAL_PROBES,
+  ...INTERPOLATION_PROBES,
   ...ARITHMETIC_PROBES,
-  ...ORDER_BY_PROBES,
+  DELIMITER_PROBES[3]!, // delim.backtick
+  ...DELIMITER_FALLBACK_PROBES,
+  INTERPOLATION_TRIAGE,
+  ...ESCAPE_SEQUENCE_PROBES,
+  ...ORDER_BY_PROBES.filter((p) => !p.id.includes("html-")),
   ...PATH_PROBES,
+  // Firewall fingerprints: these exist to explain away a comment-injection hit, not to report a bug.
+  ...ORDER_BY_PROBES.filter((p) => p.id.includes("html-")),
 ];

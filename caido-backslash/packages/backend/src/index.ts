@@ -28,6 +28,7 @@ import type {
 } from "../../shared/src/api.ts";
 import type { SendLogEntry } from "../../shared/src/api.ts";
 import {
+  AGGRESSIVITY_BUDGET,
   EVENT_DONE,
   EVENT_FINDING,
   EVENT_PROGRESS,
@@ -50,9 +51,7 @@ export type Events = DefineEvents<{
 /** The fully-typed SDK handle. Without the Events parameter, `sdk.api.send` narrows to never. */
 type BackendSDK = SDK<API, Events>;
 
-/** Probe counts per aggressivity. `ctx.limit`-style slicing, so catalogue order is meaningful. */
-const PROBE_LIMIT: Record<string, number> = { low: 4, medium: 12, high: ALL_STATIC_PROBES.length };
-const SLOT_LIMIT: Record<string, number> = { low: 3, medium: 8, high: 24 };
+
 
 /**
  * Live scan state.
@@ -182,14 +181,17 @@ async function runScan(sdk: BackendSDK, scanId: string, input: ScanRequestInput)
       return;
     }
 
+    const budget = AGGRESSIVITY_BUDGET[input.aggressivity] ?? AGGRESSIVITY_BUDGET.medium;
     const raw = stored.request.getRaw().toBytes();
     const template = locate(raw);
     const enumeration = enumerateSlots(template);
 
     const slots = enumeration.slots
       .filter((s) => input.slotFilter === undefined || s.name === input.slotFilter)
-      .slice(0, SLOT_LIMIT[input.aggressivity] ?? 8);
-    const probes = ALL_STATIC_PROBES.slice(0, PROBE_LIMIT[input.aggressivity] ?? 12);
+      .slice(0, budget.slots);
+    // `probes: null` means the entire catalogue, so it cannot fall behind as probes are added.
+    const probes =
+      budget.probes === null ? ALL_STATIC_PROBES : ALL_STATIC_PROBES.slice(0, budget.probes);
 
     let seed = 0x9e3779b9 >>> 0;
     const random = (): number => {
@@ -199,6 +201,12 @@ async function runScan(sdk: BackendSDK, scanId: string, input: ScanRequestInput)
       seed >>>= 0;
       return seed / 0xffffffff;
     };
+
+    // Stated in the log so the resolved budget is observable rather than inferred from the UI.
+    sdk.console.log(
+      `[backslash] ${scanId} aggressivity=${input.aggressivity} ` +
+        `probes=${probes.length}/${ALL_STATIC_PROBES.length} slots=${slots.length}/${enumeration.slots.length}`,
+    );
 
     const summary = await runSuite(
       {

@@ -15,6 +15,22 @@ export const EVENT_SENDS = "backslash:sends";
 
 export type ScanAggressivity = "low" | "medium" | "high";
 
+/**
+ * How much of the catalogue each aggressivity level spends.
+ *
+ * Declared here, in shared, and consumed by BOTH halves. The backend previously held its own copy and
+ * the frontend hint text held another, so the hint said "high all 24" after the catalogue had grown
+ * to 28 probes. `probes: null` means the whole catalogue, whatever its current size.
+ */
+export const AGGRESSIVITY_BUDGET: Record<
+  ScanAggressivity,
+  { readonly probes: number | null; readonly slots: number }
+> = {
+  low: { probes: 4, slots: 3 },
+  medium: { probes: 12, slots: 8 },
+  high: { probes: null, slots: 24 },
+};
+
 /** One line of the transport log, as shown in the UI. */
 export interface SendLogEntry {
   readonly seq: number;

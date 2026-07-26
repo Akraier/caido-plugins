@@ -24,6 +24,7 @@
 
 import type { Caido } from "@caido/sdk-frontend";
 
+import { AGGRESSIVITY_BUDGET } from "../../shared/src/api.ts";
 import type {
   BackslashApi,
   BackslashEvents,
@@ -123,6 +124,8 @@ const T = {
   fg: "var(--c-fg-default, #e6edf3)",
   fgMuted: "var(--c-fg-secondary, #8b949e)",
   border: "var(--c-border, #30363d)",
+  /** Input and select field background. Distinct from the page so a control reads as editable. */
+  bg: "var(--c-bg-subtle, #161b22)",
   surface: "var(--c-bg-subtle, rgba(127,127,127,0.10))",
   danger: "var(--c-danger, #f85149)",
   warning: "var(--c-warning, #d29922)",
@@ -148,6 +151,26 @@ function buttonStyle(kind: "primary" | "neutral" | "danger", active = true): str
     `color:${active ? accent : T.fgMuted};border:1px solid ${active ? accent : T.border};` +
     (kind === "neutral" ? "" : "font-weight:600;")
   );
+}
+
+/**
+ * Native form controls: select, input, textarea.
+ *
+ * These were the actual reported bug and my first pass missed them entirely. Unlike a button, a
+ * `<select>` or `<input>` takes its BACKGROUND from the user agent -- the `Field` system colour,
+ * which is white under a light colour-scheme -- while its `color` inherits from the page. Under
+ * Caido's dark theme that inherited colour is near-white, so the result is white text on a white
+ * field: the control looks blank even though it holds a value.
+ *
+ * Both halves therefore have to be set explicitly, and `color-scheme` too, because the dropdown
+ * popup and the spinner arrows are browser chrome that CSS variables cannot reach.
+ */
+function styleControl(el: HTMLSelectElement | HTMLInputElement): void {
+  el.style.cssText =
+    `padding:4px 8px;border-radius:4px;font-size:12px;font-family:inherit;` +
+    `background:${T.bg};color:${T.fg};border:1px solid ${T.border};`;
+  // Tells the browser to render native chrome (dropdown list, number spinners, caret) to match.
+  el.style.colorScheme = "dark light";
 }
 
 /** A tab or view-toggle: state shown by weight and an accent underline, never by a fill. */
@@ -373,6 +396,12 @@ export function init(sdk: App): void {
       if (level === tab.settings.aggressivity) option.selected = true;
       aggressivity.append(option);
     }
+    styleControl(aggressivity);
+    for (const option of Array.from(aggressivity.options)) {
+      // Options are rendered by the OS popup, which ignores inherited colour, so set them directly.
+      option.style.background = T.bg;
+      option.style.color = T.fg;
+    }
     aggressivity.onchange = () => {
       tab.settings = {
         ...tab.settings,
@@ -384,6 +413,7 @@ export function init(sdk: App): void {
     delay.type = "number";
     delay.min = "0";
     delay.value = String(tab.settings.delayMs);
+    styleControl(delay);
     delay.style.width = "80px";
     delay.onchange = () => {
       tab.settings = {
@@ -396,6 +426,7 @@ export function init(sdk: App): void {
     concurrency.type = "number";
     concurrency.min = "1";
     concurrency.value = String(tab.settings.maxConcurrent);
+    styleControl(concurrency);
     concurrency.style.width = "80px";
     concurrency.onchange = () => {
       tab.settings = {
@@ -408,14 +439,19 @@ export function init(sdk: App): void {
     slot.type = "text";
     slot.placeholder = "all parameters";
     slot.value = tab.settings.slotFilter;
+    styleControl(slot);
     slot.style.width = "180px";
     slot.onchange = () => {
       tab.settings = { ...tab.settings, slotFilter: slot.value.trim() };
     };
 
-    form.append(
-      row("aggressivity", aggressivity, "probe and parameter budget: low 4, medium 12, high all 24"),
-    );
+    const budgetHint = (["low", "medium", "high"] as const)
+      .map((level) => {
+        const b = AGGRESSIVITY_BUDGET[level];
+        return `${level} ${b.probes ?? "all"} probes / ${b.slots} params`;
+      })
+      .join(", ");
+    form.append(row("aggressivity", aggressivity, budgetHint));
     form.append(row("delay ms", delay, "minimum gap between the START of one request and the next"));
     form.append(
       row(
@@ -455,6 +491,20 @@ export function init(sdk: App): void {
         ),
       );
     }
+
+    // What this scan will actually do, restated for the chosen level. The operator reported that
+    // "high" seemed to probe less than expected; making the resolved budget visible removes the
+    // guesswork rather than asking them to infer it from the send counter.
+    const plan = el("div", undefined, `color:${T.fgMuted};font-size:11px;margin-bottom:10px;`);
+    const refreshPlan = (): void => {
+      const b = AGGRESSIVITY_BUDGET[tab.settings.aggressivity];
+      plan.textContent =
+        `At ${tab.settings.aggressivity}: up to ${b.probes ?? "all"} probes ` +
+        `against up to ${b.slots} parameter(s).`;
+    };
+    refreshPlan();
+    aggressivity.addEventListener("change", refreshPlan);
+    form.append(plan);
 
     const actions = el("div", undefined, "display:flex;gap:8px;align-items:center;");
     const startButton = el("button", "Start scan");
