@@ -83,6 +83,24 @@ interface Target {
 
 type TabState = "pending" | "running" | "stopping" | "stopped" | "finished" | "halted" | "error";
 
+/**
+ * The persistent settings panel belonging to a tab.
+ *
+ * A tab used to throw its launch form away on start (`form.remove()`), which had two consequences
+ * the operator hit immediately. Changing a setting meant abandoning the tab and re-launching from the
+ * context menu as a brand-new scan, and the only Stop control lived in a row that appeared alongside
+ * that teardown, so there was no stable place to look for it. The panel now lives for as long as the
+ * tab does: disabled while a scan runs, re-enabled and re-usable when it ends.
+ */
+interface TabControls {
+  readonly root: HTMLElement;
+  /** Wraps every setting. `disabled` on a fieldset disables all descendants natively. */
+  readonly fields: HTMLFieldSetElement;
+  readonly startButton: HTMLButtonElement;
+  /** Re-evaluates text that depends on other tabs' state, e.g. the same-host rate warning. */
+  readonly refreshContext: () => void;
+}
+
 interface ScanTab {
   readonly key: string;
   scanId?: string;
@@ -96,6 +114,9 @@ interface ScanTab {
   readonly logBox: HTMLDivElement;
   readonly viewToggle: HTMLDivElement;
   readonly stopButton: HTMLButtonElement;
+  readonly settingsToggle: HTMLButtonElement;
+  /** Assigned by createTab immediately after construction, before any event can arrive. */
+  controls?: TabControls;
   /** Keys of findings already drawn, so reconciliation cannot duplicate them. */
   readonly rendered: Set<string>;
   findingCount: number;
@@ -129,6 +150,8 @@ const T = {
   /** Input and select field background. Distinct from the page so a control reads as editable. */
   bg: "var(--c-bg-subtle, #161b22)",
   surface: "var(--c-bg-subtle, rgba(127,127,127,0.10))",
+  /** The page background. Needed by the sticky status row, which must not be seen through. */
+  bgDefault: "var(--c-bg-default, #0d1117)",
   danger: "var(--c-danger, #f85149)",
   warning: "var(--c-warning, #d29922)",
   success: "var(--c-success, #3fb950)",
@@ -305,7 +328,18 @@ export function init(sdk: App): void {
    */
   const pending = new Map<string, ((tab: ScanTab) => void)[]>();
 
+  /**
+   * Scans whose tab has moved on: closed, or re-run with a fresh id.
+   *
+   * A cancelled scan keeps emitting until its in-flight pairs drain, and its DONE arrives after the
+   * operator has already started the next run in the same tab. Without this, those late events either
+   * repaint the new run's status with the old run's totals, or pile up in `pending` for an id that
+   * will never be registered.
+   */
+  const retired = new Set<string>();
+
   function withTab(scanId: string, apply: (tab: ScanTab) => void): void {
+    if (retired.has(scanId)) return;
     const tab = byScanId.get(scanId);
     if (tab !== undefined) {
       apply(tab);
@@ -373,13 +407,18 @@ export function init(sdk: App): void {
   }
 
   function closeTab(tab: ScanTab): void {
-    if (tab.state === "running" && tab.scanId !== undefined) {
+    if ((tab.state === "running" || tab.state === "stopping") && tab.scanId !== undefined) {
       // Do not orphan a running scan: stopping the traffic matters more than tidying the UI.
       void sdk.backend.cancelScan(tab.scanId);
     }
     const index = tabs.indexOf(tab);
     if (index !== -1) tabs.splice(index, 1);
-    if (tab.scanId !== undefined) byScanId.delete(tab.scanId);
+    if (tab.scanId !== undefined) {
+      // The scan keeps emitting until it drains; its events now have nowhere to go.
+      retired.add(tab.scanId);
+      byScanId.delete(tab.scanId);
+      pending.delete(tab.scanId);
+    }
     tab.tabButton.remove();
     tab.pane.remove();
     if (tabs.length === 0) {
@@ -390,9 +429,17 @@ export function init(sdk: App): void {
     }
   }
 
-  /** The settings form shown on a pending tab. Nothing is sent while this is on screen. */
-  function buildLaunchForm(tab: ScanTab): HTMLElement {
+  /**
+   * The tab's settings panel. Built once and kept for the life of the tab.
+   *
+   * Every control writes straight into `tab.settings`, so whatever is on screen when Start is pressed
+   * is what gets sent. That is what makes re-running with a changed setting work without rebuilding
+   * anything: the panel is the single source of truth, not a snapshot taken at launch.
+   */
+  function buildLaunchForm(tab: ScanTab): TabControls {
     const form = el("div", undefined, `${MONO}`);
+    // Layout only. A fieldset carries a UA border, margin and padding that would draw a stray box.
+    const fields = el("fieldset", undefined, "border:none;margin:0;padding:0;min-width:0;");
 
     const summary = el(
       "div",
@@ -407,7 +454,9 @@ export function init(sdk: App): void {
           (tab.target.query === "" ? "" : `?${tab.target.query}`),
       ),
     );
-    summary.append(el("div", `request #${tab.target.requestId}`, "color:{T.fgMuted};margin-top:4px;"));
+    summary.append(
+      el("div", `request #${tab.target.requestId}`, `color:${T.fgMuted};margin-top:4px;`),
+    );
     form.append(summary);
 
     const row = (label: string, control: HTMLElement, hint?: string): HTMLElement => {
@@ -484,9 +533,11 @@ export function init(sdk: App): void {
         return `${level} ${b.probes ?? "all"} probes / ${b.slots} params`;
       })
       .join(", ");
-    form.append(row("aggressivity", aggressivity, budgetHint));
-    form.append(row("delay ms", delay, "minimum gap between the START of one request and the next"));
-    form.append(
+    fields.append(row("aggressivity", aggressivity, budgetHint));
+    fields.append(
+      row("delay ms", delay, "minimum gap between the START of one request and the next"),
+    );
+    fields.append(
       row(
         "concurrency",
         concurrency,
@@ -494,7 +545,8 @@ export function init(sdk: App): void {
           "back-to-back, so this is how many pairs overlap, not how many requests split a pair.",
       ),
     );
-    form.append(row("parameter", slot, "leave empty to scan every enumerated surface"));
+    fields.append(row("parameter", slot, "leave empty to scan every enumerated surface"));
+    form.append(fields);
 
     // Not a choice: every request is saved. Stated so the volume is not a surprise.
     form.append(
@@ -509,21 +561,16 @@ export function init(sdk: App): void {
 
     // Two concurrent scans have independent throttles, so the combined rate against one host is the
     // sum. Worth saying out loud before the operator doubles their own request rate by accident.
-    const sameHostRunning = tabs.some(
-      (other) =>
-        other !== tab && other.state === "running" && other.target.host === tab.target.host,
+    // Re-evaluated on every re-run rather than fixed at build time: the panel now outlives the launch,
+    // so a warning captured once would go stale the moment another tab started or finished.
+    const hostWarning = el(
+      "div",
+      `A scan is already running against ${tab.target.host}. Each scan throttles independently, ` +
+        "so the combined request rate will be the sum of both.",
+      `border:1px solid ${T.warning};color:${T.warning};background:transparent;` +
+        "border-radius:4px;padding:8px;margin-bottom:10px;font-size:11px;display:none;",
     );
-    if (sameHostRunning) {
-      form.append(
-        el(
-          "div",
-          `A scan is already running against ${tab.target.host}. Each scan throttles independently, ` +
-            "so the combined request rate will be the sum of both.",
-          `border:1px solid ${T.warning};color:${T.warning};background:transparent;` +
-            "border-radius:4px;padding:8px;margin-bottom:10px;font-size:11px;",
-        ),
-      );
-    }
+    form.append(hostWarning);
 
     // What this scan will actually do, restated for the chosen level. The operator reported that
     // "high" seemed to probe less than expected; making the resolved budget visible removes the
@@ -554,15 +601,87 @@ export function init(sdk: App): void {
     startButton.onclick = () => {
       startButton.disabled = true;
       startButton.textContent = "starting...";
-      void launch(tab, form);
+      void launch(tab);
     };
 
     actions.append(startButton, rememberButton);
     form.append(actions);
-    return form;
+
+    const refreshContext = (): void => {
+      refreshPlan();
+      const sameHostRunning = tabs.some(
+        (other) =>
+          other !== tab &&
+          (other.state === "running" || other.state === "stopping") &&
+          other.target.host === tab.target.host,
+      );
+      hostWarning.style.display = sameHostRunning ? "block" : "none";
+    };
+    refreshContext();
+
+    return { root: form, fields, startButton, refreshContext };
   }
 
-  async function launch(tab: ScanTab, form: HTMLElement): Promise<void> {
+  /**
+   * Clear a previous run so the tab can be re-used.
+   *
+   * The old scan id is retired rather than merely unmapped: a stopped scan drains its in-flight pairs
+   * and emits DONE afterwards, which would otherwise overwrite the new run's status with the old
+   * run's totals.
+   */
+  function resetResults(tab: ScanTab): void {
+    if (tab.scanId !== undefined) {
+      retired.add(tab.scanId);
+      byScanId.delete(tab.scanId);
+      pending.delete(tab.scanId);
+      delete tab.scanId;
+    }
+    tab.rendered.clear();
+    tab.findingCount = 0;
+    tab.logShown = 0;
+    tab.logTotal = 0;
+    tab.findingsBox.replaceChildren();
+    tab.logBox.replaceChildren();
+    tab.viewToggle.title = "";
+  }
+
+  /** Reflect a tab's state in its controls. The single place that decides what is clickable. */
+  function applyState(tab: ScanTab, state: TabState): void {
+    tab.state = state;
+    const busy = state === "running" || state === "stopping";
+    const controls = tab.controls;
+    if (controls !== undefined) {
+      controls.fields.disabled = busy;
+      controls.startButton.disabled = busy;
+      controls.startButton.textContent = busy
+        ? state === "running"
+          ? "scanning..."
+          : "stopping..."
+        : state === "pending"
+          ? "Start scan"
+          : "Re-run scan";
+      controls.startButton.style.cssText = buttonStyle("primary", !busy);
+      if (!busy) controls.refreshContext();
+    }
+    // Stop is always on screen, disabled when there is nothing to stop. An enabled-only control that
+    // materialises and vanishes is a control the operator cannot find when they need it.
+    tab.stopButton.disabled = state !== "running";
+    tab.stopButton.textContent = state === "stopping" ? "stopping..." : "Stop";
+    tab.stopButton.style.cssText = buttonStyle("danger", state === "running");
+    refreshTabButton(tab);
+  }
+
+  function setSettingsVisible(tab: ScanTab, visible: boolean): void {
+    const controls = tab.controls;
+    if (controls === undefined) return;
+    controls.root.style.display = visible ? "block" : "none";
+    tab.settingsToggle.textContent = visible ? "Hide settings" : "Settings";
+    tab.settingsToggle.style.cssText = buttonStyle("neutral");
+    if (visible) controls.refreshContext();
+  }
+
+  async function launch(tab: ScanTab): Promise<void> {
+    resetResults(tab);
     const input: ScanRequestInput = {
       requestId: tab.target.requestId,
       aggressivity: tab.settings.aggressivity,
@@ -571,29 +690,38 @@ export function init(sdk: App): void {
       ...(tab.settings.slotFilter === "" ? {} : { slotFilter: tab.settings.slotFilter }),
     };
 
+    // Mark the tab busy before awaiting: the operator has committed, and Stop has to be live for the
+    // whole window in which requests can be in flight, not only after the id comes back.
+    applyState(tab, "running");
+    tab.statusLine.style.display = "block";
+    tab.statusLine.textContent = "starting";
+
     const response = await sdk.backend.startScan(input);
     if (response.kind === "error") {
-      tab.state = "error";
-      refreshTabButton(tab);
+      applyState(tab, "error");
       tab.statusLine.textContent = `error: ${response.error}`;
-      tab.statusLine.style.display = "block";
+      setSettingsVisible(tab, true);
       return;
     }
 
     tab.scanId = response.value.scanId;
-    tab.state = "running";
-    byScanId.set(tab.scanId, tab);
-    // Replay anything that arrived while the id was still in flight.
-    for (const apply of pending.get(tab.scanId) ?? []) apply(tab);
-    pending.delete(tab.scanId);
-    refreshTabButton(tab);
+    // A late Stop, pressed while the id was still in flight, has already been recorded as a state
+    // change; honour it now that there is something to cancel.
+    if (tab.state === "stopping") void sdk.backend.cancelScan(tab.scanId);
 
-    form.remove();
-    tab.statusLine.style.display = "block";
     tab.statusLine.textContent = `${tab.scanId} starting`;
     tab.viewToggle.style.display = "flex";
-    tab.stopButton.style.cssText = `display:inline-block;${buttonStyle("danger")}`;
     tab.findingsBox.style.display = "block";
+    // Collapse the settings while the scan runs so the status and Stop stay at the top of the pane
+    // without scrolling. Re-opened when the run ends, which is when they become useful again.
+    setSettingsVisible(tab, false);
+
+    // Registration and replay go LAST. A short scan can complete before startScan resolves, so its
+    // DONE is already buffered here; replaying it before the lines above would let them overwrite a
+    // finished run with "starting" and re-hide the settings on a tab that is no longer busy.
+    byScanId.set(tab.scanId, tab);
+    for (const apply of pending.get(tab.scanId) ?? []) apply(tab);
+    pending.delete(tab.scanId);
   }
 
   function createTab(target: Target): ScanTab {
@@ -606,19 +734,24 @@ export function init(sdk: App): void {
     const closeButton = el("span", " x", "margin-left:6px;opacity:0.6;");
 
     const pane = el("div", undefined, "display:none;");
+    // Sticky so the run controls stay reachable while the operator scrolls a long findings list. This
+    // row is the tab's permanent control surface: status, settings toggle and Stop, always present.
     const statusRow = el(
       "div",
       undefined,
-      "display:flex;gap:10px;align-items:center;margin-bottom:10px;",
+      "display:flex;gap:10px;align-items:center;margin-bottom:10px;position:sticky;top:0;" +
+        `background:${T.bgDefault};padding:4px 0;z-index:1;`,
     );
     const statusLine = el("div", undefined, `${MONO}opacity:0.85;display:none;flex:1;`);
+    const settingsToggle = el("button", "Settings");
+    settingsToggle.style.cssText = buttonStyle("neutral");
     const stopButton = el("button", "Stop");
-    stopButton.style.cssText = `display:none;${buttonStyle("danger")}`;
-    statusRow.append(statusLine, stopButton);
+    stopButton.style.cssText = buttonStyle("danger", false);
+    stopButton.disabled = true;
+    statusRow.append(statusLine, settingsToggle, stopButton);
     const viewToggle = el("div", undefined, "display:none;gap:6px;margin-bottom:8px;");
     const findingsBox = el("div", undefined, "display:none;");
     const logBox = el("div", undefined, `display:none;${MONO}font-size:11px;line-height:1.45;`);
-    pane.append(statusRow, viewToggle, findingsBox, logBox);
 
     const tab: ScanTab = {
       key: `tab-${tabCounter}`,
@@ -632,6 +765,7 @@ export function init(sdk: App): void {
       logBox,
       viewToggle,
       stopButton,
+      settingsToggle,
       rendered: new Set<string>(),
       findingCount: 0,
       logShown: 0,
@@ -654,15 +788,20 @@ export function init(sdk: App): void {
     viewToggle.append(showFindings, showLog);
 
     stopButton.onclick = () => {
-      if (tab.scanId === undefined) return;
+      if (tab.state !== "running") return;
       // Optimistic state change: the operator pressed Stop and must see it took effect immediately,
       // even though the run finishes asynchronously once the transport stops accepting work.
-      tab.state = "stopping";
-      refreshTabButton(tab);
-      stopButton.disabled = true;
-      stopButton.textContent = "stopping...";
-      tab.statusLine.textContent = `${tab.scanId} stopping — no further requests will be sent`;
-      void sdk.backend.cancelScan(tab.scanId);
+      applyState(tab, "stopping");
+      tab.statusLine.textContent =
+        tab.scanId === undefined
+          ? "stopping — no further requests will be sent"
+          : `${tab.scanId} stopping — no further requests will be sent`;
+      // Undefined only in the window before startScan resolves; launch() honours the pending stop.
+      if (tab.scanId !== undefined) void sdk.backend.cancelScan(tab.scanId);
+    };
+
+    settingsToggle.onclick = () => {
+      setSettingsVisible(tab, tab.controls?.root.style.display === "none");
     };
 
     tabButton.onclick = () => select(tab);
@@ -673,7 +812,11 @@ export function init(sdk: App): void {
     tabButton.textContent = tabLabel(tab);
     tabButton.append(closeButton);
 
-    pane.prepend(buildLaunchForm(tab));
+    tab.controls = buildLaunchForm(tab);
+    pane.append(statusRow, tab.controls.root, viewToggle, findingsBox, logBox);
+    applyState(tab, "pending");
+    // Sets display explicitly rather than leaving it unset, so the toggle's read of it is unambiguous.
+    setSettingsVisible(tab, true);
 
     tabs.push(tab);
     tabBar.append(tabButton);
@@ -729,14 +872,18 @@ export function init(sdk: App): void {
     // missed for any reason still gets drawn. showFinding dedupes, so this is safe to run always.
     for (const finding of result.findings) showFinding(tab, finding);
 
-    tab.state =
+    // Re-opens the settings and turns Start into Re-run: the tab becomes reusable rather than spent.
+    applyState(
+      tab,
       result.haltReason === undefined
         ? "finished"
         : result.haltReason === "cancelled"
           ? "stopped"
-          : "halted";
-    refreshTabButton(tab);
-    tab.stopButton.style.display = "none";
+          : "halted",
+    );
+    setSettingsVisible(tab, true);
+    // Another tab waiting on this host may now be clear to run.
+    for (const other of tabs) other.controls?.refreshContext();
 
     // An operator stop and a target that stopped answering are different outcomes and must not read
     // the same: one is a decision, the other is a warning about the measurement.

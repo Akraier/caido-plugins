@@ -73,6 +73,26 @@ const scans = new Map<string, ActiveScan>();
 const sendLogs = new Map<string, { record: (r: SendRecord) => void; flush: () => void }>();
 let scanCounter = 0;
 
+/**
+ * How many finished scans stay queryable through `getResult`.
+ *
+ * Neither map used to be pruned, which was survivable while a tab was single-use: one scan per tab,
+ * a handful per session. Re-running inside a tab makes many scans per session the normal case, and
+ * each retained entry holds a full result set plus a spent transport, so the ceiling matters now.
+ */
+const RETAINED_SCANS = 20;
+
+/** Release what a completed scan no longer needs, and evict the oldest finished results. */
+function retire(scanId: string): void {
+  // The log buffer has just been flushed to the frontend, which owns the lines from here on.
+  sendLogs.delete(scanId);
+  // Insertion order is oldest-first. Running scans are never evicted, however old.
+  const finished = [...scans.entries()].filter(([, scan]) => scan.result !== undefined);
+  for (const [id] of finished.slice(0, Math.max(0, finished.length - RETAINED_SCANS))) {
+    scans.delete(id);
+  }
+}
+
 function ok<T>(value: T): ApiResult<T> {
   return { kind: "ok", value };
 }
@@ -289,6 +309,7 @@ async function runScan(sdk: BackendSDK, scanId: string, input: ScanRequestInput)
     };
     sendLogs.get(scanId)?.flush();
     sdk.api.send(EVENT_DONE, active.result);
+    retire(scanId);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     sdk.console.error(`[backslash] scan ${scanId} failed: ${message}`);
@@ -303,6 +324,7 @@ async function runScan(sdk: BackendSDK, scanId: string, input: ScanRequestInput)
     };
     sendLogs.get(scanId)?.flush();
     sdk.api.send(EVENT_DONE, active.result);
+    retire(scanId);
   }
 }
 
