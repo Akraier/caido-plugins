@@ -23,11 +23,14 @@ Installable as a Caido plugin, and also runnable from the command line.
 | Reflection excision with bounded spans | working |
 | Screening ladder S0 to S2 | working |
 | Control-arm attribution and confidence grading | working |
+| Second-order measurement: redirect targets and stored sinks | working |
 | CLI over raw sockets | working |
 | Caido plugin: backend transport, RPC, findings, context menu, results page | working |
 | Permutation statistic (S4), calibration tiers, multipart surfaces | not started |
 
-318 unit tests plus an end-to-end suite that drives the whole chain against synthetic targets.
+395 unit tests plus an end-to-end suite that drives the whole chain against synthetic targets, and a
+live validation against a PortSwigger FreeMarker lab recorded in
+`docs/validation/second-order-ssti.md`.
 
 ## Install into Caido
 
@@ -56,6 +59,58 @@ The plugin also keeps its own transport log per scan, under the **Requests** tab
 history cannot: which probe and which arm each request belonged to, how the response was classified
 (usable, soft-fail, hard-fail), and the reason when a firewall or rate limiter intervened. That view
 holds the last 500 lines and says how many earlier ones it is not showing.
+
+## Measuring somewhere other than the probe's own response
+
+Template injection usually does not render where it was injected. The payload goes into a parameter,
+the handler stores it or bounces, and the evaluated result appears on the redirect target, a profile
+page or a preview. Two settings point the measurement at that other place. Both are off by default.
+
+- **follow redirects** — measure the final response instead of the 3xx, up to N hops. Same-origin
+  only, and not configurably otherwise: a `Location` is attacker-influenceable in exactly the bugs
+  this hunts, so an automatic follower honouring a cross-host hop would send probe traffic, carrying
+  the session's cookies, to a host nobody authorised.
+- **observe URL** — fetch one fixed URL after every probe and measure that instead. The stored case:
+  inject at A, render at B. A bare path resolves against the scanned request's origin; an absolute URL
+  is honoured as typed, and the resolved origin is logged so it can be checked against scope.
+
+The detector's premise — compare a break arm against an escape arm — holds whichever response is
+compared, so this needs no new statistics. What it does need is an invariant: **every** probe arm goes
+through one `measure()` helper, including all four control arms. Witnesses describe the observed
+response, and the vetoes that attribute them must describe the same response or attribution is
+meaningless. A second send path that skipped observation would leave every veto silently inert.
+
+Costs, stated because they are not small. Observation is a second request per arm, so it roughly
+doubles the traffic. An observation URL, and a redirect followed from a non-idempotent method, force
+probe pairs to run **one at a time**: two pairs sharing one sink interleave as inject(A), inject(B),
+observe, and the observation carries the other pair's payload. A shared mutable sink cannot be measured
+in parallel.
+
+If the endpoint under test *saves* what you send, remember that a scan writes a probe payload on every
+send. When it finishes the stored value is whatever the last probe wrote, not the original.
+
+## Choosing the parameter
+
+Enumeration needs the raw request bytes, which only the backend can fetch, so the settings panel asks
+it and offers a picker rather than a text box:
+
+```
+all parameters
+q = widget            [form-value]
+page = 2              [form-value]
+sid = abc             [cookie-value]
+segment[0] = submit   [path-segment]
+```
+
+Name, surface kind and current value, which matters most for a POST body — those are invisible from
+the tab header. Below it, the panel states the body size and content type and lists any **deferred**
+surfaces, because "my body parameter is not in the list" and "multipart is not supported yet" are the
+same fact and it belongs in the configuration panel rather than in the result after a scan is spent.
+
+The picker sends the surface kind alongside the name. Names are not unique across surfaces: a request
+with `?q=` and a body `q=` has two slots called `q`, and filtering by name alone silently scanned both.
+
+`--list-slots` prints the same enumeration from the CLI and sends nothing.
 
 ## Try it without Caido
 
@@ -91,6 +146,26 @@ The last two rows are the point. A firewall that reliably blocks the break arm p
 reproducible difference that any statistical test would call significant; it is reported as a
 blinded measurement rather than a finding. And a target that merely echoes its input differs in every
 send for a reason that has nothing to do with parsing, which the payload-delta veto removes.
+
+### Second-order modes
+
+| MODE | shape | detected only with |
+|---|---|---|
+| `erb-redirect` | 302 to a page that renders the payload; the 3xx is byte-identical | `--follow-redirects` |
+| `erb-stored` | saved at `/save`, rendered at `/profile` | `--observe /profile` |
+| `freemarker-stored` | POST-saves then 302s to a shared render; error at status 200; rendering aborts at the payload | `--follow-redirects` |
+
+`freemarker-stored` is the PortSwigger lab shape that three separate bugs used to hide; see
+`docs/validation/second-order-ssti.md`.
+
+```sh
+node packages/cli/src/main.ts --request fm.req --host 127.0.0.1 --port 8097 --no-tls \
+  --slot "form-value template" --follow-redirects
+```
+
+`--list-slots` prints the injectable parameters and exits without sending anything, which is the
+quickest way to find the name `--slot` wants. `--slot` accepts either a bare name or `"kind name"`, so
+a line of that listing pastes straight back.
 
 ### Against a real target
 
@@ -138,6 +213,10 @@ reporting a clean bill of health it did not earn.
   executed verifications against `ts-http-forge`.
 - `docs/analysis/` — the scripts that mechanically extracted and decoded the probe catalogue from
   the original Java, and their output.
+- `docs/validation/second-order-ssti.md` — the live confirmation against a PortSwigger FreeMarker lab,
+  and the three bugs it exposed. Worth reading before simplifying `echoTruncated`, the lexeme
+  admissibility rule in `runLadder`, or the verbatim splice of `baseValue`: each looks like an
+  oddity and each is load-bearing.
 
 ## Notable divergences from the original
 
