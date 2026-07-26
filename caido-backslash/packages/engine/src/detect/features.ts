@@ -77,6 +77,41 @@ function fnvString(text: string): number {
   return hash >>> 0;
 }
 
+/**
+ * Hash the Location header with the reflected input excised.
+ *
+ * Hashing it raw made every redirect that carries its input back -- `?next=`, `?returnUrl=`, an error
+ * message parameter -- into a confident finding, because the two arms send different payloads and so
+ * produce different Locations by construction. That is a reflection, not a statement about how the
+ * server parsed anything.
+ *
+ * The delta veto cannot rescue this one: it reasons about byte-class counters, and a hash has no
+ * classes left to reason about. So excise first, exactly as the body already does, using the same
+ * canaries. The canary alphabet is alphanumeric, so it survives percent-encoding unchanged and a plain
+ * substring search finds it whether the value was encoded or not.
+ */
+function locationFingerprint(
+  location: string | undefined,
+  canary?: { readonly left: string; readonly right?: string },
+): number {
+  if (location === undefined) return 0;
+  if (canary === undefined) return fnvString(location);
+
+  const start = location.indexOf(canary.left);
+  if (start === -1) return fnvString(location);
+  const head = location.slice(0, start);
+
+  // End-anchored probes send no closing canary, so everything from the marker on is the echo.
+  if (canary.right === undefined) return fnvString(`${head}<echo>`);
+
+  const end = location.indexOf(canary.right, start + canary.left.length);
+  // A missing closing canary could mean the value was truncated, which is arguably signal. Excising to
+  // the end anyway is the conservative reading: losing a real witness costs less than a false one.
+  if (end === -1) return fnvString(`${head}<echo>`);
+
+  return fnvString(`${head}<echo>${location.slice(end + canary.right.length)}`);
+}
+
 export function featurise(
   response: EngineResponse,
   options: FeaturiseOptions = {},
@@ -128,13 +163,14 @@ export function featurise(
     .trim()
     .toLowerCase();
 
-  // No redirect following, so the Location header is the only evidence a redirect changed.
+  // Evidence that a redirect changed. Still computed when redirects ARE being followed: the hop that
+  // was taken is part of the measured behaviour, not a detail to discard.
   const location = header(response, "location");
 
   return {
     status: response.status,
     contentType,
-    locationHash: location === undefined ? 0 : fnvString(location),
+    locationHash: locationFingerprint(location, options.canary),
     bodyLength: scan.bodyLength,
     counters,
     keywords: scan.keywords,

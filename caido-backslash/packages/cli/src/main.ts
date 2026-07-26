@@ -19,10 +19,17 @@ import { readFileSync } from "node:fs";
 import {
   ALL_STATIC_PROBES,
   DEFAULT_THROTTLE,
+  composeObservers,
   createProbeTransport,
+  createRedirectObserver,
+  createUrlObserver,
   enumerateSlots,
+  formatLocated,
   locate,
+  type ObserveSend,
+  parseObservationUrl,
   runSuite,
+  sameOrigin,
   type SendRecord,
   type SuiteDiagnostic,
   type SuiteFinding,
@@ -43,6 +50,9 @@ interface Args {
   readonly probeFilter?: string;
   readonly maxSlots: number;
   readonly verbose: boolean;
+  readonly followRedirects: boolean;
+  readonly maxHops: number;
+  readonly observeUrl?: string;
 }
 
 function parseArgs(argv: readonly string[]): Args {
@@ -56,14 +66,19 @@ function parseArgs(argv: readonly string[]): Args {
     throw new Error(
       "usage: backslash --request <raw-request-file> --host <host> [--port 443] [--no-tls]\n" +
         "                 [--allow host,host] [--insecure] [--delay-ms 0] [--concurrency 2]\n" +
-        "                 [--slot <name>] [--probe <id>] [--max-slots 10] [--verbose]",
+        "                 [--slot <name>] [--probe <id>] [--max-slots 10] [--verbose]\n" +
+        "                 [--follow-redirects] [--max-hops 3] [--observe <url-or-path>]",
     );
   }
   const tls = !argv.includes("--no-tls");
   const allowRaw = get("--allow");
   const slot = get("--slot");
   const probe = get("--probe");
+  const observe = get("--observe");
   return {
+    followRedirects: argv.includes("--follow-redirects"),
+    maxHops: Number.parseInt(get("--max-hops") ?? "3", 10),
+    ...(observe === undefined ? {} : { observeUrl: observe }),
     requestFile,
     host,
     port: Number.parseInt(get("--port") ?? (tls ? "443" : "80"), 10),
@@ -85,6 +100,10 @@ function printFinding(finding: SuiteFinding): void {
   console.log(`   surface   ${finding.slot.kind} ${finding.slot.name}`);
   console.log(`   break     ${JSON.stringify(finding.breakPayload)}`);
   console.log(`   escape    ${JSON.stringify(finding.escapePayload)}`);
+  if (finding.observedVia !== undefined && finding.observedVia.length > 0) {
+    console.log(`   MEASURED ON ANOTHER RESPONSE, not this endpoint's reply`);
+    for (const hop of finding.observedVia) console.log(`     -> ${hop}`);
+  }
   console.log(`   witnesses`);
   for (const w of finding.witnesses) {
     console.log(`     ${w.name}: break=${String(w.breakValue)} escape=${String(w.escapeValue)}`);
@@ -166,6 +185,37 @@ async function main(): Promise<void> {
     console.log(`  deferred  ${item.kind}: ${item.reason}`);
   }
   console.log(`probes      ${probes.length}`);
+
+  // Same construction as the Caido backend, deliberately: the CLI and the plugin must measure the
+  // same response for the same flags, or one of them is testing something else.
+  const origin = { host: args.host, port: args.port, tls: args.tls };
+  const send: ObserveSend = (request, options) => transport.send(request, options);
+  const observers = [];
+  let serialiseProbes = false;
+
+  if (args.followRedirects) {
+    observers.push(
+      createRedirectObserver({ template, send, maxHops: Math.max(1, Math.min(10, args.maxHops)) }),
+    );
+    console.log(`measuring   redirect target (<=${args.maxHops} same-origin hops)`);
+  }
+  if (args.observeUrl !== undefined) {
+    const parsed = parseObservationUrl(args.observeUrl, origin);
+    if (parsed.kind !== "ok") throw new Error(`--observe rejected: ${parsed.detail}`);
+    if (!sameOrigin(parsed.located.origin, origin)) {
+      console.log(`WARNING     observation URL is on a different origin than the scanned request`);
+    }
+    observers.push(createUrlObserver({ template, send, at: parsed.located }));
+    serialiseProbes = true;
+    console.log(`measuring   ${formatLocated(parsed.located)} after every probe`);
+    console.log(`            pairs run one at a time (a shared sink cannot be measured in parallel)`);
+  }
+  const observer =
+    observers.length === 0
+      ? undefined
+      : observers.length === 1
+        ? observers[0]!
+        : composeObservers(observers[0]!, observers[1]!);
   console.log("");
 
   const summary = await runSuite(
@@ -173,9 +223,11 @@ async function main(): Promise<void> {
       template,
       slots,
       probes,
-      target: { host: args.host, port: args.port, tls: args.tls },
+      target: origin,
       transport,
       random,
+      ...(observer === undefined ? {} : { observer }),
+      ...(serialiseProbes ? { serialiseProbes: true } : {}),
       pairConcurrency: args.concurrency,
     },
     { onFinding: printFinding, onDiagnostic: printDiagnostic },

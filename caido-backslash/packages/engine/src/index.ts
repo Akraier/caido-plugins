@@ -46,6 +46,33 @@ export type {
 } from "./transport/throttle.ts";
 export { DEFAULT_THROTTLE, createProbeTransport, isHalted } from "./transport/throttle.ts";
 
+export type {
+  ObserveContext,
+  ObserveOutcome,
+  ObserveSend,
+  Observer,
+  ObserverPlan,
+} from "./transport/observe.ts";
+export {
+  buildObservationRequest,
+  composeObservers,
+  createRedirectObserver,
+  createUrlObserver,
+} from "./transport/observe.ts";
+
+export type { Located, Origin, ResolveResult } from "./transport/url.ts";
+export {
+  formatLocated,
+  formatOrigin,
+  parseObservationUrl,
+  removeDotSegments,
+  resolveLocation,
+  sameOrigin,
+} from "./transport/url.ts";
+
+export type { MeasureDeps, Measurement } from "./detect/measure.ts";
+export { measure } from "./detect/measure.ts";
+
 // ---- request layer ----
 export type {
   AssembleOptions,

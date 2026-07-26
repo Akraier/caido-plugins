@@ -10,8 +10,18 @@ import type { DefineAPI, DefineEvents, SDK } from "caido:plugin";
 import {
   ALL_STATIC_PROBES,
   DEFAULT_THROTTLE,
+  composeObservers,
   createProbeTransport,
+  createRedirectObserver,
+  createUrlObserver,
   enumerateSlots,
+  formatLocated,
+  formatOrigin,
+  type ObserveSend,
+  type Observer,
+  type Origin,
+  parseObservationUrl,
+  sameOrigin,
   type SendRecord,
   locate,
   runSuite,
@@ -126,6 +136,9 @@ function toScanFinding(scanId: string, finding: SuiteFinding): ScanFinding {
     ...(finding.evidenceRequestId === undefined
       ? {}
       : { evidenceRequestId: finding.evidenceRequestId }),
+    ...(finding.observedVia === undefined || finding.observedVia.length === 0
+      ? {}
+      : { observedVia: finding.observedVia }),
   };
 }
 
@@ -171,6 +184,70 @@ function renderDescription(finding: SuiteFinding): string {
       "escalate.",
   );
   return lines.join("\n");
+}
+
+type ObserverPlanResult =
+  | {
+      readonly kind: "ok";
+      readonly observer?: Observer;
+      readonly serialisesProbes: boolean;
+      readonly describe: string;
+    }
+  | { readonly kind: "error"; readonly detail: string };
+
+/**
+ * Decide which response the scan will measure.
+ *
+ * Refusing outright on a bad observation URL is deliberate. The alternative -- quietly falling back to
+ * measuring the probe's own response -- would run a full scan that looks successful while testing
+ * something the operator did not ask for, and report "no findings" for a second-order bug it never
+ * looked for.
+ */
+function buildObserverPlan(
+  sdk: BackendSDK,
+  scanId: string,
+  input: ScanRequestInput,
+  template: ReturnType<typeof locate>,
+  transport: { send: ProbeTransport["send"] },
+  origin: Origin,
+): ObserverPlanResult {
+  const send: ObserveSend = (request, options) => transport.send(request, options);
+  const observers: Observer[] = [];
+  const parts: string[] = [];
+  let serialisesProbes = false;
+
+  if (input.followRedirects === true) {
+    const maxHops = Math.max(1, Math.min(10, input.maxRedirectHops ?? 3));
+    observers.push(createRedirectObserver({ template, send, maxHops }));
+    parts.push(`redirect target (<=${maxHops} same-origin hops)`);
+  }
+
+  if (input.observationUrl !== undefined && input.observationUrl.trim() !== "") {
+    const parsed = parseObservationUrl(input.observationUrl, origin);
+    if (parsed.kind !== "ok") {
+      return { kind: "error", detail: `observation URL rejected: ${parsed.detail}` };
+    }
+    const at = parsed.located;
+    if (!sameOrigin(at.origin, origin)) {
+      // Permitted -- typing a full URL is an explicit act -- but never silent. Probe-derived traffic
+      // reaching an unintended host during an engagement is a scope incident, not a bug.
+      sdk.console.log(
+        `[backslash] ${scanId} observation URL is on a DIFFERENT origin: ${formatLocated(at)} ` +
+          `(scanned request is ${formatOrigin(origin)}). Confirm it is in scope.`,
+      );
+    }
+    observers.push(createUrlObserver({ template, send, at }));
+    // Inject at A, render at B: B is shared mutable state, so concurrent pairs would read each
+    // other's payloads. Correctness over throughput.
+    serialisesProbes = true;
+    parts.push(`observation URL ${formatLocated(at)}`);
+  }
+
+  if (observers.length === 0) {
+    return { kind: "ok", serialisesProbes: false, describe: "the probe's own response" };
+  }
+  const observer = observers.length === 1 ? observers[0]! : composeObservers(observers[0]!, observers[1]!);
+  return { kind: "ok", observer, serialisesProbes, describe: parts.join(" then ") };
 }
 
 async function runScan(sdk: BackendSDK, scanId: string, input: ScanRequestInput): Promise<void> {
@@ -222,10 +299,33 @@ async function runScan(sdk: BackendSDK, scanId: string, input: ScanRequestInput)
       return seed / 0xffffffff;
     };
 
+    const origin = {
+      host: stored.request.getHost(),
+      port: stored.request.getPort(),
+      tls: stored.request.getTls(),
+    };
+
+    const plan = buildObserverPlan(sdk, scanId, input, template, active.transport, origin);
+    if (plan.kind === "error") {
+      active.result = {
+        scanId,
+        findings: [],
+        diagnostics: [
+          { scanId, slotName: "-", probeId: "-", kind: "inconclusive", detail: plan.detail },
+        ],
+        sends: 0,
+        deferredSurfaces: [],
+      };
+      sdk.api.send(EVENT_DONE, active.result);
+      retire(scanId);
+      return;
+    }
+
     // Stated in the log so the resolved budget is observable rather than inferred from the UI.
     sdk.console.log(
       `[backslash] ${scanId} aggressivity=${input.aggressivity} ` +
-        `probes=${probes.length}/${ALL_STATIC_PROBES.length} slots=${slots.length}/${enumeration.slots.length}`,
+        `probes=${probes.length}/${ALL_STATIC_PROBES.length} slots=${slots.length}/${enumeration.slots.length} ` +
+        `measuring=${plan.describe}`,
     );
 
     const summary = await runSuite(
@@ -233,13 +333,11 @@ async function runScan(sdk: BackendSDK, scanId: string, input: ScanRequestInput)
         template,
         slots,
         probes,
-        target: {
-          host: stored.request.getHost(),
-          port: stored.request.getPort(),
-          tls: stored.request.getTls(),
-        },
+        target: origin,
         transport: active.transport,
         random,
+        ...(plan.observer === undefined ? {} : { observer: plan.observer }),
+        ...(plan.serialisesProbes ? { serialiseProbes: true } : {}),
         // Same knob governs both: each pair holds at most one in-flight request, so the number of
         // concurrent pairs is what actually determines how many requests are in flight.
         pairConcurrency: Math.max(1, input.maxConcurrent),

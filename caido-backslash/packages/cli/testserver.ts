@@ -48,8 +48,59 @@ function extractQ(req: { url?: string; headers: Record<string, unknown> }, body:
   return new URLSearchParams(body).get("q") ?? "";
 }
 
+/** The single shared sink for `erb-stored`. Shared state is exactly what forces serialised pairs. */
+let stored = "";
+
+/**
+ * A minimal ERB-like engine: unbalanced tags raise a parse error, a well-formed expression is
+ * evaluated. Extracted so the redirect and stored modes render identically to the direct one -- a
+ * second copy would drift and then the modes would not be testing the same engine.
+ */
+function renderErb(
+  payload: string,
+  echo: string,
+  send: (status: number, body: string) => void,
+): void {
+  const opens = (payload.match(/<%/g) ?? []).length;
+  const closes = (payload.match(/%>/g) ?? []).length;
+
+  if (opens > closes) {
+    send(
+      500,
+      `<html><body><div>SyntaxError: embedded document meets end of file ` +
+        `(unterminated ERB tag)</div></body></html>`,
+    );
+    return;
+  }
+
+  const expression = /<%=\s*([^%]*?)\s*%>/.exec(payload);
+  if (expression !== null) {
+    const source = expression[1] ?? "";
+    // Only arithmetic, and division by zero raises exactly as Ruby would.
+    if (/^[0-9+\-*/() ]+$/.test(source)) {
+      if (/\/\s*0+(?![1-9])/.test(source)) {
+        send(500, "<html><body><div>ZeroDivisionError: divided by 0</div></body></html>");
+        return;
+      }
+      let rendered: string;
+      try {
+        rendered = String(Function(`"use strict";return (${source})`)());
+      } catch {
+        send(500, "<html><body><div>SyntaxError in ERB expression</div></body></html>");
+        return;
+      }
+      send(200, `<html><body><p>Hello ${rendered}</p><div>3 results</div></body></html>`);
+      return;
+    }
+  }
+
+  // Anything else, including a stray close tag, is inert literal text.
+  send(200, `<html><body>${echo}<div>3 results</div></body></html>`);
+}
+
 function handle(req: any, res: any, body: string): void {
   const q = extractQ(req, body);
+  const path = new URL(req.url ?? "/", `http://localhost:${port}`).pathname;
 
   // Everything after the opening canary is the payload under test.
   const marker = /bs[0-9a-z]{4}/.exec(q);
@@ -62,7 +113,14 @@ function handle(req: any, res: any, body: string): void {
 
   const send = (status: number, body: string): void => {
     const write = (): void => {
-      res.writeHead(status, { "Content-Type": "text/html; charset=utf-8" });
+      // `Connection: close` on purpose. The CLI's Node provider reads until EOF rather than honouring
+      // Content-Length, so a keep-alive response costs it the server's full idle timeout (~6s) per
+      // request and the harness looks hung. Caido's own transport is unaffected; this keeps the
+      // offline harness usable without pretending the provider is fixed.
+      res.writeHead(status, {
+        "Content-Type": "text/html; charset=utf-8",
+        Connection: "close",
+      });
       res.end(body);
     };
     if (LATENCY_MS > 0) setTimeout(write, LATENCY_MS);
@@ -120,43 +178,56 @@ function handle(req: any, res: any, body: string): void {
     }
 
     case "erb": {
-      // A minimal ERB-like template engine: the value is interpolated into a template and rendered.
-      // Unbalanced tags raise a parse error; a well-formed expression is evaluated.
-      const opens = (payload.match(/<%/g) ?? []).length;
-      const closes = (payload.match(/%>/g) ?? []).length;
+      renderErb(payload, echo, send);
+      return;
+    }
 
-      if (opens > closes) {
-        send(
-          500,
-          `<html><body><div>SyntaxError: embedded document meets end of file ` +
-            `(unterminated ERB tag)</div></body></html>`,
-        );
+    /**
+     * SSTI that renders on the REDIRECT TARGET, not on the injection endpoint.
+     *
+     * The injection endpoint always answers 302 with an identical body, so measuring it can never
+     * find anything -- which is the point. Only following the Location and measuring /rendered
+     * exposes the difference.
+     */
+    case "erb-redirect": {
+      if (path === "/rendered") {
+        const msg = new URL(req.url ?? "/", `http://localhost:${port}`).searchParams.get("msg") ?? "";
+        const marked = /bs[0-9a-z]{4}/.exec(msg);
+        const inner = marked === null ? msg : msg.slice(marked.index + marked[0].length);
+        renderErb(inner, `<p>Message: ${msg}</p>`, send);
         return;
       }
+      const write = (): void => {
+        res.writeHead(302, {
+          Location: `/rendered?msg=${encodeURIComponent(q)}`,
+          "Content-Type": "text/html; charset=utf-8",
+          Connection: "close",
+        });
+        // Byte-identical regardless of payload: the 3xx itself carries no signal at all.
+        res.end("<html><body>Redirecting...</body></html>");
+      };
+      if (LATENCY_MS > 0) setTimeout(write, LATENCY_MS);
+      else write();
+      return;
+    }
 
-      const expression = /<%=\s*([^%]*?)\s*%>/.exec(payload);
-      if (expression !== null) {
-        const source = expression[1] ?? "";
-        // Only arithmetic, and division by zero raises exactly as Ruby would.
-        if (/^[0-9+\-*/() ]+$/.test(source)) {
-          if (/\/\s*0+(?![1-9])/.test(source)) {
-            send(500, "<html><body><div>ZeroDivisionError: divided by 0</div></body></html>");
-            return;
-          }
-          let rendered: string;
-          try {
-            rendered = String(Function(`"use strict";return (${source})`)());
-          } catch {
-            send(500, "<html><body><div>SyntaxError in ERB expression</div></body></html>");
-            return;
-          }
-          send(200, `<html><body><p>Hello ${rendered}</p><div>3 results</div></body></html>`);
-          return;
-        }
+    /**
+     * STORED SSTI: injected at one endpoint, rendered at another.
+     *
+     * The injection endpoint answers an identical 200 every time. The payload is only evaluated when
+     * /profile is fetched, so this is unreachable without an observation URL. It is also the case
+     * that mandates serialised pairs: `stored` is one shared slot, so two concurrent pairs would each
+     * read the other's payload.
+     */
+    case "erb-stored": {
+      if (path === "/profile") {
+        const marked = /bs[0-9a-z]{4}/.exec(stored);
+        const inner = marked === null ? stored : stored.slice(marked.index + marked[0].length);
+        renderErb(inner, `<p>Bio: ${stored}</p>`, send);
+        return;
       }
-
-      // Anything else, including a stray close tag, is inert literal text.
-      send(200, `<html><body>${echo}<div>3 results</div></body></html>`);
+      stored = q;
+      send(200, "<html><body><div>Saved.</div></body></html>");
       return;
     }
 

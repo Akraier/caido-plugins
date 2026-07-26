@@ -13,10 +13,13 @@
 import type { ProbePair } from "../probes/types.ts";
 import { equalisePair } from "../probes/pad.ts";
 import type { Slot } from "../request/slots.ts";
-import { type RequestTemplate, asciiBytes, assemble, locate } from "../request/template.ts";
+import { type RequestTemplate, asciiBytes, assemble, locate, sliceText } from "../request/template.ts";
 import type { EngineRequest, RandomSource } from "../transport/types.ts";
 import { type ProbeTransport, isHalted } from "../transport/throttle.ts";
 import { isUsable } from "../transport/admission.ts";
+import type { Observer } from "../transport/observe.ts";
+import type { Located } from "../transport/url.ts";
+import { type MeasureDeps, measure } from "./measure.ts";
 
 import {
   type ControlArm,
@@ -62,6 +65,14 @@ export interface SuiteFinding {
   }[];
   /** Host reference for the saved evidence exchange, when the host could provide one. */
   readonly evidenceRequestId?: string;
+  /**
+   * Where the measured response came from, when it was not the probe's own reply.
+   *
+   * Empty for a normal finding. For a second-order one it lists the hops walked, which is the
+   * difference between "the payload broke this endpoint" and "the payload broke the page it redirects
+   * to" -- a distinction the operator cannot recover from the finding otherwise.
+   */
+  readonly observedVia?: readonly string[];
 }
 
 export type DiagnosticKind =
@@ -107,8 +118,26 @@ export interface SuiteOptions {
    * them one at a time made the whole scan sequential: only ever one request in flight, so the
    * transport's own concurrency cap did nothing and throughput was pinned at
    * 1/(latency + inter-request gap).
+   *
+   * Ignored when the observer plan requires serialisation: see `observer`.
    */
   readonly pairConcurrency?: number;
+  /**
+   * Measure a response other than the probe's own -- a redirect target, or a second-order sink.
+   *
+   * Threaded to every arm through `measure()`, including the control arms, because witnesses and the
+   * vetoes that attribute them must describe the same response.
+   */
+  readonly observer?: Observer;
+  /**
+   * Force one probe pair at a time regardless of `pairConcurrency`.
+   *
+   * Required when the observed response is a shared resource rather than this request's own
+   * continuation. Two pairs running concurrently would interleave as inject(A), inject(B), observe(),
+   * and the observation would carry the other pair's payload. A shared mutable sink cannot be measured
+   * in parallel, so the option is enforced here rather than trusted to the caller.
+   */
+  readonly serialiseProbes?: boolean;
 }
 
 export interface SuiteSummary {
@@ -237,6 +266,29 @@ async function runPair(
   // declares about its own bytes.
   const build = makeArmBuilder(options, slot, probe.wireForm ?? "literal", random);
 
+  /**
+   * Base for resolving a relative `Location`.
+   *
+   * Deliberately the template's ORIGINAL target, not the spliced one. A relative redirect resolves
+   * against the request's directory, so taking it from the payload-bearing target would make the two
+   * arms resolve to different paths whenever the payload sits in the path itself -- turning the
+   * measurement into a comparison of two different pages. Fixing the base keeps the payload the only
+   * variable.
+   */
+  const base: Located = {
+    origin: {
+      host: options.target.host,
+      port: options.target.port,
+      tls: options.target.tls,
+    },
+    target: sliceText(options.template.raw, options.template.targetRange),
+  };
+  const measureDeps: MeasureDeps = {
+    transport,
+    base,
+    ...(options.observer === undefined ? {} : { observer: options.observer }),
+  };
+
   const endAnchored = END_ANCHORED_STAGES.has(probe.stage);
   const canaryFor = (): Canary =>
     endAnchored
@@ -263,7 +315,16 @@ async function runPair(
 
   let ladder;
   try {
-    ladder = await runLadder({ transport, random, canary: canaryFor }, arms);
+    ladder = await runLadder(
+      {
+        transport,
+        random,
+        canary: canaryFor,
+        base,
+        ...(options.observer === undefined ? {} : { observer: options.observer }),
+      },
+      arms,
+    );
   } catch (error) {
     if (error instanceof PayloadNotDeliverable) {
       return note("inconclusive", `payload not deliverable on this surface: ${error.message}`);
@@ -285,22 +346,30 @@ async function runPair(
   }
 
   // Candidate. Re-measure once so the control arms have a live reference, then spend them.
+  // Through measure(), like every other arm: the witnesses being attributed describe the OBSERVED
+  // response, so the reference and the controls must describe it too.
   const refCanary = canaryFor();
-  const breakSend = await transport.send(build(arms.breakPayload, refCanary), {
+  const breakSend = await measure(measureDeps, build(arms.breakPayload, refCanary), {
     label: `${probe.id}:remeasure-break`,
   });
-  const escapeSend = await transport.send(build(arms.escapePayload, refCanary), {
+  const escapeSend = await measure(measureDeps, build(arms.escapePayload, refCanary), {
     label: `${probe.id}:remeasure-escape`,
   });
-  if (isHalted(breakSend) || !isUsable(breakSend) || isHalted(escapeSend) || !isUsable(escapeSend)) {
-    return note("inconclusive", "could not re-measure the pair for attribution");
+  if (breakSend.kind !== "ok" || escapeSend.kind !== "ok") {
+    const why =
+      breakSend.kind === "observation-unusable"
+        ? breakSend.detail
+        : escapeSend.kind === "observation-unusable"
+          ? escapeSend.detail
+          : "the pair did not re-measure";
+    return note("inconclusive", `could not re-measure the pair for attribution: ${why}`);
   }
 
-  const breakVector = featurise(breakSend.response, {
+  const breakVector = featurise(breakSend.measured, {
     canary: refCanary,
     sentPayload: arms.breakPayload,
   });
-  const escapeVector = featurise(escapeSend.response, {
+  const escapeVector = featurise(escapeSend.measured, {
     canary: refCanary,
     sentPayload: arms.escapePayload,
   });
@@ -320,14 +389,14 @@ async function runPair(
     let failed = false;
     for (let replicate = 0; replicate < CONTROL_REPLICATES; replicate++) {
       const canary = canaryFor();
-      const result = await transport.send(build(arm.payload, canary), {
+      const result = await measure(measureDeps, build(arm.payload, canary), {
         label: `${probe.id}:control-${arm.name}`,
       });
-      if (isHalted(result) || !isUsable(result)) {
+      if (result.kind !== "ok") {
         failed = true;
         break;
       }
-      const vector = featurise(result.response, { canary, sentPayload: arm.payload });
+      const vector = featurise(result.measured, { canary, sentPayload: arm.payload });
       for (let w = 0; w < live.length; w++) {
         const witness = live[w]!;
         perWitness[w]!.push(
@@ -355,12 +424,18 @@ async function runPair(
   // Persisted evidence: re-send the winning break arm so a finding cites the exact exchange its
   // claim was computed from.
   let evidenceRequestId: string | undefined;
-  const evidence = await transport.send(build(arms.breakPayload, refCanary), {
+  let observedVia: readonly string[] = [];
+  const evidence = await measure(measureDeps, build(arms.breakPayload, refCanary), {
     persist: true,
     label: `${probe.id}:evidence`,
   });
-  if (!isHalted(evidence) && isUsable(evidence)) {
-    evidenceRequestId = evidence.response.requestId;
+  if (evidence.kind === "ok") {
+    // Cite the exchange the claim was actually computed from. With an observer that is the observed
+    // response, not the injection request -- pointing at the injection would show a 302 with nothing
+    // in it and leave the operator to guess where the rendered payload was seen. `persist` propagates
+    // to the observation leg, so both are in the database and either id is citable.
+    evidenceRequestId = evidence.measured.requestId ?? evidence.probe.requestId;
+    observedVia = evidence.via;
   }
 
   return {
@@ -372,6 +447,7 @@ async function runPair(
       confidence: gradeConfidence(veto.survivors),
       breakPayload: arms.breakPayload,
       escapePayload: arms.escapePayload,
+      ...(observedVia.length === 0 ? {} : { observedVia }),
       witnesses: veto.survivors,
       attributedElsewhere: veto.vetoed.map((v) => ({
         witness: v.witness,
@@ -442,7 +518,10 @@ export async function runSuite(
   // Pairs run concurrently; the transport still governs the aggregate request rate through its own
   // concurrency cap and inter-request gap. Defaults to one so a caller that does not opt in keeps
   // strictly sequential, reproducible behaviour.
-  const width = Math.max(1, Math.min(options.pairConcurrency ?? 1, items.length || 1));
+  // Serialisation wins over the requested width. A shared observation sink read by two concurrent
+  // pairs returns the other pair's payload, which is a wrong answer rather than a slow one.
+  const requested = options.serialiseProbes === true ? 1 : (options.pairConcurrency ?? 1);
+  const width = Math.max(1, Math.min(requested, items.length || 1));
   await Promise.all(Array.from({ length: width }, () => worker()));
 
   // Collected in item order regardless of completion order, so the summary is deterministic.

@@ -15,11 +15,14 @@
  */
 
 import { classDelta } from "../response/classes.ts";
-import { type Admission, isUsable } from "../transport/admission.ts";
-import { type ProbeTransport, isHalted } from "../transport/throttle.ts";
+import type { Admission } from "../transport/admission.ts";
+import type { Observer } from "../transport/observe.ts";
+import type { ProbeTransport } from "../transport/throttle.ts";
 import type { EngineRequest, RandomSource } from "../transport/types.ts";
+import type { Located } from "../transport/url.ts";
 
 import { type FeatureDiff, type FeatureVector, differingFeatures, featurise } from "./features.ts";
+import { measure } from "./measure.ts";
 
 export const M_SCREEN = 1;
 export const M_FILTER = 3;
@@ -44,7 +47,7 @@ export type LadderOutcome =
   /** The measurement could not be completed. Never reported as a negative result. */
   | {
       readonly kind: "inconclusive";
-      readonly reason: "blinded" | "halted" | "body-unreliable";
+      readonly reason: "blinded" | "halted" | "body-unreliable" | "observation";
       readonly detail: string;
       readonly sends: number;
     };
@@ -63,6 +66,21 @@ export interface LadderDeps {
   readonly random: RandomSource;
   /** Fresh canary per send. Injected so the ladder is deterministic under test. */
   readonly canary: () => Canary;
+  /**
+   * Redirects the measurement to a response other than the probe's own: a redirect target, or a
+   * second-order sink. Absent means measure the probe's reply, which is the default.
+   *
+   * Whatever is passed here MUST also reach the control arms in runner.ts. Witnesses and the vetoes
+   * that attribute them have to describe the same response or attribution is meaningless.
+   */
+  readonly observer?: Observer;
+  /**
+   * Origin and target of the probe request, so a relative `Location` resolves correctly.
+   *
+   * Optional because observation is optional: an observer without a base cannot resolve anything and
+   * is inert. The suite runner always supplies both.
+   */
+  readonly base?: Located;
 }
 
 export interface ProbeArms {
@@ -86,11 +104,15 @@ interface MiniPairResult {
   readonly diffs: FeatureDiff[];
   readonly breakVector: FeatureVector;
   readonly escapeVector: FeatureVector;
+  /** Probe sends plus any observation sends. Not a constant once an observer is configured. */
+  readonly sends: number;
 }
 
 interface MiniPairFailure {
   readonly ok: false;
-  readonly failure: Admission | "halted";
+  readonly failure: Admission | "halted" | "observation";
+  /** Present for an observation failure, which carries its own explanation. */
+  readonly detail?: string;
   readonly sends: number;
 }
 
@@ -113,24 +135,43 @@ async function sendMiniPair(
 
   const firstCanary = frame(deps.canary());
   const firstArm = breakFirst ? "break" : "escape";
-  const firstResult = await deps.transport.send(arms.build(first, firstCanary), {
+  const firstResult = await measure(deps, arms.build(first, firstCanary), {
     label: `${arms.label ?? "probe"}:${firstArm}`,
   });
-  if (isHalted(firstResult)) return { ok: false, failure: "halted", sends: 1 };
-  if (!isUsable(firstResult)) return { ok: false, failure: firstResult, sends: 1 };
+  if (firstResult.kind === "halted") return { ok: false, failure: "halted", sends: firstResult.sends };
+  if (firstResult.kind === "observation-unusable") {
+    return { ok: false, failure: "observation", detail: firstResult.detail, sends: firstResult.sends };
+  }
+  if (firstResult.kind === "unusable") {
+    return { ok: false, failure: firstResult.failure, sends: firstResult.sends };
+  }
 
   const secondCanary = frame(deps.canary());
-  const secondResult = await deps.transport.send(arms.build(second, secondCanary), {
+  const secondResult = await measure(deps, arms.build(second, secondCanary), {
     label: `${arms.label ?? "probe"}:${breakFirst ? "escape" : "break"}`,
   });
-  if (isHalted(secondResult)) return { ok: false, failure: "halted", sends: 2 };
-  if (!isUsable(secondResult)) return { ok: false, failure: secondResult, sends: 2 };
+  const priorSends = firstResult.sends;
+  if (secondResult.kind === "halted") {
+    return { ok: false, failure: "halted", sends: priorSends + secondResult.sends };
+  }
+  if (secondResult.kind === "observation-unusable") {
+    return {
+      ok: false,
+      failure: "observation",
+      detail: secondResult.detail,
+      sends: priorSends + secondResult.sends,
+    };
+  }
+  if (secondResult.kind === "unusable") {
+    return { ok: false, failure: secondResult.failure, sends: priorSends + secondResult.sends };
+  }
 
-  const firstVector = featurise(firstResult.response, {
+  // Featurise what the observer pointed at, which is the probe's own response when there is none.
+  const firstVector = featurise(firstResult.measured, {
     canary: firstCanary,
     sentPayload: first,
   });
-  const secondVector = featurise(secondResult.response, {
+  const secondVector = featurise(secondResult.measured, {
     canary: secondCanary,
     sentPayload: second,
   });
@@ -143,6 +184,7 @@ async function sendMiniPair(
     diffs: differingFeatures(breakVector, escapeVector),
     breakVector,
     escapeVector,
+    sends: priorSends + secondResult.sends,
   };
 }
 
@@ -220,6 +262,16 @@ export async function runLadder(
           sends,
         };
       }
+      if (result.failure === "observation") {
+        // The probe was answered; the response we were told to measure was not. Reported separately
+        // so a mistyped observation URL cannot be mistaken for the target rate-limiting the scan.
+        return {
+          kind: "inconclusive",
+          reason: "observation",
+          detail: result.detail ?? "the observed response could not be measured",
+          sends,
+        };
+      }
       const admission = result.failure;
       const describe =
         admission.kind === "soft-fail"
@@ -234,7 +286,7 @@ export async function runLadder(
         sends,
       };
     }
-    sends += 2;
+    sends += result.sends;
     rounds.push(result.diffs);
     if (result.breakVector.echoState !== "absent" || result.escapeVector.echoState !== "absent") {
       reflected = true;

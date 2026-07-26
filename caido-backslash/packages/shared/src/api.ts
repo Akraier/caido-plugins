@@ -62,6 +62,23 @@ export interface ScanRequestInput {
   readonly maxConcurrent: number;
   /** Restrict to one slot by name. Empty means all. */
   readonly slotFilter?: string;
+  /**
+   * Follow redirects and measure the final response instead of the 3xx.
+   *
+   * Template injection frequently renders somewhere other than where it was injected: the handler
+   * bounces and the evaluated payload appears on the target page. Same-origin only, always.
+   */
+  readonly followRedirects?: boolean;
+  /** Redirect hops to follow when `followRedirects` is set. Clamped to 1..10 by the engine. */
+  readonly maxRedirectHops?: number;
+  /**
+   * Fetch this URL after every probe and measure IT rather than the probe's own response.
+   *
+   * The stored / second-order case: inject at A, render at B. A bare path resolves against the
+   * scanned request's origin; an absolute URL is honoured as typed. Setting this forces probe pairs to
+   * run one at a time, because two pairs sharing one sink would read each other's payloads.
+   */
+  readonly observationUrl?: string;
 }
 
 export interface ScanProgress {
@@ -105,6 +122,13 @@ export interface ScanFinding {
   readonly sends: number;
   /** Caido request id of the saved evidence re-send, when one was obtained. */
   readonly evidenceRequestId?: string;
+  /**
+   * Hops walked to reach the measured response, when it was not the probe's own reply.
+   *
+   * Absent for a normal finding. Present for a second-order one, where it is the difference between
+   * "this endpoint mishandled the payload" and "the page it redirects to did".
+   */
+  readonly observedVia?: readonly string[];
 }
 
 /**

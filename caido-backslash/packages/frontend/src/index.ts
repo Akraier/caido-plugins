@@ -52,6 +52,11 @@ interface Settings {
   delayMs: number;
   maxConcurrent: number;
   slotFilter: string;
+  /** Measure the redirect target rather than the 3xx. Same-origin hops only. */
+  followRedirects: boolean;
+  maxRedirectHops: number;
+  /** Fetch this after every probe and measure it instead. Empty means no observation URL. */
+  observationUrl: string;
 }
 
 /**
@@ -70,6 +75,11 @@ const DEFAULTS: Settings = {
   delayMs: 25,
   maxConcurrent: 4,
   slotFilter: "",
+  // Off by default: it doubles the request count on any endpoint that redirects, and that is the
+  // operator's call to make per target rather than something to spend silently.
+  followRedirects: false,
+  maxRedirectHops: 3,
+  observationUrl: "",
 };
 
 interface Target {
@@ -256,6 +266,20 @@ function renderFinding(finding: ScanFinding): HTMLElement {
   payloads.append(el("div", `break   ${JSON.stringify(finding.breakPayload)}`));
   payloads.append(el("div", `escape  ${JSON.stringify(finding.escapePayload)}`));
   card.append(payloads);
+
+  // Second-order findings must not read like direct ones: the anomaly was seen on another response,
+  // and reproducing it by hand means knowing that. Called out in the accent colour rather than
+  // buried, because "injected here, broke there" is the whole claim.
+  if (finding.observedVia !== undefined && finding.observedVia.length > 0) {
+    const via = el(
+      "div",
+      undefined,
+      `margin-bottom:6px;padding:6px 8px;border-radius:4px;border:1px solid ${T.warning};color:${T.warning};`,
+    );
+    via.append(el("div", "measured on another response, not this endpoint's reply"));
+    for (const hop of finding.observedVia) via.append(el("div", `  -> ${hop}`));
+    card.append(via);
+  }
 
   card.append(el("div", "witnesses"));
   for (const w of finding.witnesses) {
@@ -546,6 +570,70 @@ export function init(sdk: App): void {
       ),
     );
     fields.append(row("parameter", slot, "leave empty to scan every enumerated surface"));
+
+    // ---- Where the result is measured ----
+    // Template injection often renders somewhere other than where it was injected. These two options
+    // point the measurement at that other place; everything else about detection is unchanged.
+    const follow = el("input");
+    follow.type = "checkbox";
+    follow.checked = tab.settings.followRedirects;
+    // A checkbox holds no text, so it needs the colour-scheme hint only: a background would paint a
+    // filled box behind the checkmark.
+    follow.style.colorScheme = "dark light";
+
+    const hops = el("input");
+    hops.type = "number";
+    hops.min = "1";
+    hops.max = "10";
+    hops.value = String(tab.settings.maxRedirectHops);
+    styleControl(hops);
+    hops.style.width = "70px";
+    hops.onchange = () => {
+      tab.settings = {
+        ...tab.settings,
+        maxRedirectHops: Math.max(1, Math.min(10, Number.parseInt(hops.value, 10) || 3)),
+      };
+    };
+
+    const observe = el("input");
+    observe.type = "text";
+    observe.placeholder = "/profile or https://host/page";
+    observe.value = tab.settings.observationUrl;
+    styleControl(observe);
+    observe.style.width = "280px";
+    observe.onchange = () => {
+      tab.settings = { ...tab.settings, observationUrl: observe.value.trim() };
+      refreshPlan();
+    };
+
+    const syncHops = (): void => {
+      hops.disabled = !follow.checked;
+      hops.style.opacity = follow.checked ? "1" : "0.5";
+    };
+    follow.onchange = () => {
+      tab.settings = { ...tab.settings, followRedirects: follow.checked };
+      syncHops();
+      refreshPlan();
+    };
+    syncHops();
+
+    fields.append(
+      row(
+        "follow redirects",
+        follow,
+        "measure the redirect target instead of the 3xx. Same-origin hops only: a Location is " +
+          "attacker-controlled in exactly these bugs, so an off-origin hop is never followed.",
+      ),
+    );
+    fields.append(row("max hops", hops, "how far to follow a redirect chain"));
+    fields.append(
+      row(
+        "observe URL",
+        observe,
+        "fetch this after every probe and measure IT — the stored case, injected at A and rendered " +
+          "at B. A bare path resolves against this request's origin. Forces one pair at a time.",
+      ),
+    );
     form.append(fields);
 
     // Not a choice: every request is saved. Stated so the volume is not a surprise.
@@ -578,9 +666,25 @@ export function init(sdk: App): void {
     const plan = el("div", undefined, `color:${T.fgMuted};font-size:11px;margin-bottom:10px;`);
     const refreshPlan = (): void => {
       const b = AGGRESSIVITY_BUDGET[tab.settings.aggressivity];
-      plan.textContent =
+      const lines = [
         `At ${tab.settings.aggressivity}: up to ${b.probes ?? "all"} probes ` +
-        `against up to ${b.slots} parameter(s).`;
+          `against up to ${b.slots} parameter(s).`,
+      ];
+      // Say the cost out loud. Observation is a second request per arm, so it roughly doubles the
+      // traffic, and the operator should see that before starting rather than infer it from the
+      // send counter afterwards.
+      if (tab.settings.observationUrl !== "") {
+        lines.push(
+          `Measuring ${tab.settings.observationUrl} after every probe: about 2x the requests, ` +
+            "and pairs run ONE AT A TIME because a shared page cannot be measured in parallel.",
+        );
+      } else if (tab.settings.followRedirects) {
+        lines.push(
+          `Measuring the redirect target where one is returned: up to ${tab.settings.maxRedirectHops} ` +
+            "extra request(s) per arm on endpoints that redirect, none on those that do not.",
+        );
+      }
+      plan.textContent = lines.join(" ");
     };
     refreshPlan();
     aggressivity.addEventListener("change", refreshPlan);
@@ -688,6 +792,12 @@ export function init(sdk: App): void {
       delayMs: tab.settings.delayMs,
       maxConcurrent: tab.settings.maxConcurrent,
       ...(tab.settings.slotFilter === "" ? {} : { slotFilter: tab.settings.slotFilter }),
+      ...(tab.settings.followRedirects
+        ? { followRedirects: true, maxRedirectHops: tab.settings.maxRedirectHops }
+        : {}),
+      ...(tab.settings.observationUrl === ""
+        ? {}
+        : { observationUrl: tab.settings.observationUrl }),
     };
 
     // Mark the tab busy before awaiting: the operator has committed, and Stop has to be live for the
