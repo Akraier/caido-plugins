@@ -34,6 +34,20 @@ function label(text: string): HTMLElement {
   return el("div", { fontWeight: "600", margin: "0 0 0.25rem 0" }, text);
 }
 
+// Native form controls (select / input / textarea) must set BOTH background and color explicitly,
+// from Caido theme tokens. Unlike an sdk.ui component, a bare native control takes its background
+// from the user-agent `Field` colour -- white under a light colour-scheme -- while its `color`
+// inherits from the page, which under Caido's dark theme is near-white. The result is white text on
+// a white field: a control that looks blank even while holding a value. `color-scheme` is set too so
+// the dropdown popup and number spinners (browser chrome that CSS variables cannot reach) also match.
+function styleControl(node: HTMLSelectElement | HTMLInputElement | HTMLTextAreaElement): void {
+  node.style.background = "var(--c-bg-subtle, #161b22)";
+  node.style.color = "var(--c-fg-default, #e6edf3)";
+  node.style.border = "1px solid var(--c-border, #333)";
+  node.style.borderRadius = "4px";
+  node.style.colorScheme = "dark light";
+}
+
 // ---- Toggle section -------------------------------------------------------
 
 function buildToggle(sdk: FrontendSDK, getCfg: () => ReflectorConfig, setEnabled: (v: boolean) => Promise<void>): { card: HTMLElement; render: () => void } {
@@ -72,14 +86,22 @@ function buildToggle(sdk: FrontendSDK, getCfg: () => ReflectorConfig, setEnabled
 function buildConfig(sdk: FrontendSDK, getCfg: () => ReflectorConfig, save: (patch: Partial<ReflectorConfig>) => Promise<void>): { card: HTMLElement; render: () => void } {
   const verbose = el("input") as HTMLInputElement;
   verbose.type = "checkbox";
+  // A native checkbox is UA chrome; the light-scheme default renders wrong against the dark theme,
+  // so hint the scheme (no bg/color -- a checkbox holds no text, so the white-on-white trap does not
+  // apply, but the box itself must match).
+  verbose.style.colorScheme = "dark light";
   const verboseWrap = el("label", { display: "flex", alignItems: "center", gap: "0.5rem", margin: "0 0 0.75rem 0" });
   verboseWrap.append(verbose, el("span", undefined, "Verbose console logging"));
 
   const maxBody = el("input", { width: "12rem" }) as HTMLInputElement;
   maxBody.type = "number";
   maxBody.min = "1024";
+  // Was set only for width, so it inherited near-white page text on the UA white field: invisible.
+  styleControl(maxBody);
 
   const cts = el("textarea", { width: "100%", minHeight: "7rem", fontFamily: "monospace", boxSizing: "border-box" }) as HTMLTextAreaElement;
+  // Same UA trap as the input above: the allow-list text was near-white on the white textarea field.
+  styleControl(cts);
 
   const btnHost = el("div", { marginTop: "0.75rem" });
 
@@ -162,8 +184,13 @@ function buildFindings(sdk: FrontendSDK): HTMLElement {
   for (const opt of ["All", "CONFIRMED", "ATTEMPT", "REFLECTED"]) {
     const o = el("option", undefined, opt) as HTMLOptionElement;
     o.value = opt;
+    // Options are drawn by the OS popup, which ignores inherited colour, so set both directly.
+    o.style.background = "var(--c-bg-subtle, #161b22)";
+    o.style.color = "var(--c-fg-default, #e6edf3)";
     filter.appendChild(o);
   }
+  // The select itself had only a margin, so the collapsed value was near-white on the UA white field.
+  styleControl(filter);
   const counter = el("span", { marginLeft: "0.75rem", opacity: "0.7", fontSize: "0.85rem" });
 
   const table = el("table", { width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" });
