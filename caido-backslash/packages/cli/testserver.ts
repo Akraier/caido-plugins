@@ -21,8 +21,35 @@ const MODE = process.env.MODE ?? "vulnerable";
 const LATENCY_MS = Number.parseInt(process.env.LATENCY_MS ?? "0", 10);
 
 const server = createServer((req, res) => {
+  const chunks: Buffer[] = [];
+  req.on("data", (c: Buffer) => chunks.push(c));
+  req.on("end", () => handle(req, res, Buffer.concat(chunks).toString("utf8")));
+});
+
+/** Pull the tested parameter from the query, a urlencoded body, or a JSON body. */
+function extractQ(req: { url?: string; headers: Record<string, unknown> }, body: string): string {
   const url = new URL(req.url ?? "/", `http://localhost:${port}`);
-  const q = url.searchParams.get("q") ?? "";
+  const fromQuery = url.searchParams.get("q");
+  if (fromQuery !== null && fromQuery !== "") return fromQuery;
+
+  const contentType = String(req.headers["content-type"] ?? "").toLowerCase();
+  if (contentType.includes("json")) {
+    try {
+      const parsed: unknown = JSON.parse(body);
+      if (typeof parsed === "object" && parsed !== null && "q" in parsed) {
+        return String((parsed as Record<string, unknown>).q ?? "");
+      }
+    } catch {
+      // A deliberately invalid JSON payload is itself the test; fall through to the raw body.
+      return body;
+    }
+    return "";
+  }
+  return new URLSearchParams(body).get("q") ?? "";
+}
+
+function handle(req: any, res: any, body: string): void {
+  const q = extractQ(req, body);
 
   // Everything after the opening canary is the payload under test.
   const marker = /bs[0-9a-z]{4}/.exec(q);
@@ -146,7 +173,7 @@ const server = createServer((req, res) => {
       send(200, `<html><body>${echo}<div>3 results</div><span>${nonce}</span></body></html>`);
       return;
   }
-});
+}
 
 server.listen(port, "127.0.0.1", () => {
   console.log(`test target listening on http://127.0.0.1:${port} (MODE=${MODE})`);
