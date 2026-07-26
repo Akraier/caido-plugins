@@ -1,6 +1,6 @@
 {
   "name": "@caido-backslash/engine",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "Host-agnostic backslash-powered scanning engine. No Caido imports: drives any transport through an injected provider.",
   "type": "module",
   "main": "src/index.ts",

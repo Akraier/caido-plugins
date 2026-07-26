@@ -96,6 +96,8 @@ interface ScanTab {
   readonly logBox: HTMLDivElement;
   readonly viewToggle: HTMLDivElement;
   readonly stopButton: HTMLButtonElement;
+  /** Keys of findings already drawn, so reconciliation cannot duplicate them. */
+  readonly rendered: Set<string>;
   findingCount: number;
   logShown: number;
   logTotal: number;
@@ -292,6 +294,37 @@ export function init(sdk: App): void {
   const tabs: ScanTab[] = [];
   /** Live scans by their backend id. Events are routed strictly through this. */
   const byScanId = new Map<string, ScanTab>();
+
+  /**
+   * Events that arrived before their tab was registered.
+   *
+   * The backend starts the scan and begins emitting BEFORE the startScan call returns the id, while
+   * the frontend can only register the id once that call resolves. Anything emitted in that window
+   * used to hit the unknown-scan guard and be dropped silently -- including findings, so a scan could
+   * detect something and display nothing. Buffer instead of dropping, and flush on registration.
+   */
+  const pending = new Map<string, ((tab: ScanTab) => void)[]>();
+
+  function withTab(scanId: string, apply: (tab: ScanTab) => void): void {
+    const tab = byScanId.get(scanId);
+    if (tab !== undefined) {
+      apply(tab);
+      return;
+    }
+    const queue = pending.get(scanId) ?? [];
+    queue.push(apply);
+    pending.set(scanId, queue);
+  }
+
+  /** Draw a finding unless it is already on screen. Keyed so reconciliation is idempotent. */
+  function showFinding(tab: ScanTab, finding: ScanFinding): void {
+    const key = `${finding.probeId}|${finding.surface}|${finding.slotName}`;
+    if (tab.rendered.has(key)) return;
+    tab.rendered.add(key);
+    tab.findingCount += 1;
+    refreshTabButton(tab);
+    tab.findingsBox.prepend(renderFinding(finding));
+  }
   let activeTab: ScanTab | undefined;
 
   const body = el("div", undefined, "padding:14px;height:100%;display:flex;flex-direction:column;");
@@ -550,6 +583,9 @@ export function init(sdk: App): void {
     tab.scanId = response.value.scanId;
     tab.state = "running";
     byScanId.set(tab.scanId, tab);
+    // Replay anything that arrived while the id was still in flight.
+    for (const apply of pending.get(tab.scanId) ?? []) apply(tab);
+    pending.delete(tab.scanId);
     refreshTabButton(tab);
 
     form.remove();
@@ -596,6 +632,7 @@ export function init(sdk: App): void {
       logBox,
       viewToggle,
       stopButton,
+      rendered: new Set<string>(),
       findingCount: 0,
       logShown: 0,
       logTotal: 0,
@@ -651,26 +688,20 @@ export function init(sdk: App): void {
   // Every handler resolves the tab through byScanId. An event for a scan this page does not know
   // about is dropped, which is what stops concurrent scans bleeding into each other.
   sdk.backend.onEvent(EVENT_PROGRESS, (progress: ScanProgress) => {
-    const tab = byScanId.get(progress.scanId);
-    if (tab === undefined) return;
+    withTab(progress.scanId, (tab) => {
     tab.statusLine.textContent =
       `${progress.scanId}  ${progress.phase}  ` +
       `probes ${progress.probesDone}/${progress.probesTotal}  ` +
       `sends ${progress.sends}  findings ${progress.findings}`;
+    });
   });
 
   sdk.backend.onEvent(EVENT_FINDING, (finding: ScanFinding) => {
-    const tab = byScanId.get(finding.scanId);
-    if (tab === undefined) return;
-    tab.findingCount += 1;
-    refreshTabButton(tab);
-    tab.findingsBox.prepend(renderFinding(finding));
+    withTab(finding.scanId, (tab) => showFinding(tab, finding));
   });
 
   sdk.backend.onEvent(EVENT_SENDS, (batch: SendLogBatch) => {
-    const tab = byScanId.get(batch.scanId);
-    if (tab === undefined) return;
-
+    withTab(batch.scanId, (tab) => {
     for (const entry of batch.entries) {
       tab.logBox.append(renderSend(entry));
       tab.logShown += 1;
@@ -689,11 +720,15 @@ export function init(sdk: App): void {
       hidden > 0
         ? `showing the last ${tab.logShown} of ${tab.logTotal} sends`
         : `${tab.logTotal} sends`;
+    });
   });
 
   sdk.backend.onEvent(EVENT_DONE, (result: ScanResult) => {
-    const tab = byScanId.get(result.scanId);
-    if (tab === undefined) return;
+    withTab(result.scanId, (tab) => {
+    // Reconcile: the completion payload carries every finding, so anything whose live event was
+    // missed for any reason still gets drawn. showFinding dedupes, so this is safe to run always.
+    for (const finding of result.findings) showFinding(tab, finding);
+
     tab.state =
       result.haltReason === undefined
         ? "finished"
@@ -743,6 +778,7 @@ export function init(sdk: App): void {
             : `No findings, but ${unmeasured.length} probe(s) could not be measured cleanly. A blinded measurement is not a clean result — see the Requests tab.`;
       tab.findingsBox.append(el("div", message, `${MONO}opacity:0.8;`));
     }
+    });
   });
 
   const stage = (target: Target): void => {

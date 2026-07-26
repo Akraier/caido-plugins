@@ -1,7 +1,7 @@
 {
   "id": "caido-backslash",
   "name": "Backslash",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "Probe-pair detection of unknown server-side injection classes. Reports a parameter only when the difference survives length, punctuation, byte-level and drift control arms.",
   "author": {
     "name": "Akraier",
