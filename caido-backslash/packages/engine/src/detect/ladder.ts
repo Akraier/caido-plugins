@@ -331,10 +331,26 @@ export async function runLadder(
   }
 
   if (unreliable) {
-    // An unpaired echo means the body features could not be excised reliably. Reporting a witness
-    // derived from them would be reporting a measurement we know is contaminated.
-    const nonBody = survivors.filter((w) => w.featureClass === "status" || w.featureClass === "timing");
-    if (nonBody.length === 0) {
+    // An unpaired echo means the reflected span could not be bounded, so a body feature may be
+    // counting payload bytes rather than the application's own output. Those are dropped.
+    //
+    // A lexeme witness is kept when its needle occurs in NEITHER payload. Failed excision can only
+    // contaminate a count by leaving payload bytes in the body, so a keyword that is absent from both
+    // payloads cannot have come from one: it is the application's own text. This matters because the
+    // unpaired case is frequently an interpreter aborting, and the words it aborts with -- "error",
+    // "exception", "divide" -- are exactly the evidence worth keeping. Discarding them wholesale threw
+    // away a full FreeMarker stack trace and left nothing to report.
+    const admissible = survivors.filter((w) => {
+      if (w.featureClass === "status" || w.featureClass === "timing") return true;
+      if (w.featureClass !== "lexeme") return false;
+      const needle = w.name.startsWith("kw:") ? w.name.slice(3).toLowerCase() : undefined;
+      if (needle === undefined) return false;
+      return (
+        !arms.breakPayload.toLowerCase().includes(needle) &&
+        !arms.escapePayload.toLowerCase().includes(needle)
+      );
+    });
+    if (admissible.length === 0) {
       return {
         kind: "inconclusive",
         reason: "body-unreliable",
@@ -342,7 +358,7 @@ export async function runLadder(
         sends,
       };
     }
-    return { kind: "candidate", witnesses: nonBody, m: M_ESTABLISH, sends };
+    return { kind: "candidate", witnesses: admissible, m: M_ESTABLISH, sends };
   }
 
   return { kind: "candidate", witnesses: survivors, m: M_ESTABLISH, sends };

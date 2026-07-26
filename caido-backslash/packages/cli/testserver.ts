@@ -98,6 +98,65 @@ function renderErb(
   send(200, `<html><body>${echo}<div>3 results</div></body></html>`);
 }
 
+/**
+ * Render `${...}` interpolations, aborting at the first failing one.
+ *
+ * The abort is the important part: on error FreeMarker emits what it had produced so far, then the
+ * error, and nothing else. Whatever followed the payload in the template -- the scanner's closing
+ * canary included -- never reaches the response.
+ */
+function renderFreemarker(template: string): string {
+  let out = "";
+  let at = 0;
+  for (;;) {
+    const open = template.indexOf("${", at);
+    if (open === -1) {
+      out += template.slice(at);
+      return out;
+    }
+    const close = template.indexOf("}", open + 2);
+    if (close === -1) {
+      // An unterminated interpolation is a parse error, and nothing renders at all.
+      return "FreeMarker template error: unclosed interpolation, expecting &quot;}&quot;";
+    }
+    out += template.slice(at, open);
+    const source = template.slice(open + 2, close);
+
+    if (!/^[0-9+\-*/() .]+$/.test(source)) {
+      // Not arithmetic: an undefined variable, which FreeMarker also treats as fatal.
+      return (
+        `${out}FreeMarker template error (DEBUG mode; use RETHROW in production!):\n` +
+        `The following has evaluated to null or missing: ==> ${source}\n----\n` +
+        `FTL stack trace ("~" means nesting-related):\n\t- Failed at: \${${source}}\n----\n` +
+        `freemarker.core.InvalidReferenceException: [... Exception message was already printed ...]\n` +
+        `\tat freemarker.core.InvalidReferenceException.getInstance(InvalidReferenceException.java:134)\n`
+      );
+    }
+    if (/\/\s*0+(?![1-9.])/.test(source)) {
+      // Status stays 200: the trace is rendered into the page, and rendering stops here.
+      return (
+        `${out}FreeMarker template error (DEBUG mode; use RETHROW in production!):\n` +
+        `Arithmetic operation failed: / by zero\n----\n` +
+        `FTL stack trace ("~" means nesting-related):\n\t- Failed at: \${${source}}\n----\n` +
+        `Java stack trace (for programmers):\n----\n` +
+        `freemarker.core._MiscTemplateException: [... Exception message was already printed ...]\n` +
+        `\tat freemarker.core.ArithmeticExpression._eval(ArithmeticExpression.java:78)\n` +
+        `\tat freemarker.core.Environment.process(Environment.java:310)\n` +
+        `Caused by: java.lang.ArithmeticException: / by zero\n` +
+        `\tat java.base/java.math.BigDecimal.divide(BigDecimal.java:1653)\n`
+      );
+    }
+    let value: string;
+    try {
+      value = String(Function(`"use strict";return (${source})`)());
+    } catch {
+      return `${out}FreeMarker template error: could not evaluate \${${source}}`;
+    }
+    out += value;
+    at = close + 1;
+  }
+}
+
 function handle(req: any, res: any, body: string): void {
   const q = extractQ(req, body);
   const path = new URL(req.url ?? "/", `http://localhost:${port}`).pathname;
@@ -219,6 +278,44 @@ function handle(req: any, res: any, body: string): void {
      * that mandates serialised pairs: `stored` is one shared slot, so two concurrent pairs would each
      * read the other's payload.
      */
+    /**
+     * The PortSwigger "template injection using documentation" shape, which the scanner missed.
+     *
+     * Three properties together are what defeated it, and all three matter:
+     *
+     *  1. POST saves the template and 302s to a GET that renders it -- so the payload is evaluated on a
+     *     SHARED page, one round trip later. Concurrent pairs overwrite each other's template.
+     *  2. The error is rendered INTO the page with status 200, so there is no status witness.
+     *  3. FreeMarker aborts at the failing expression, so everything after the payload -- including the
+     *     closing canary -- is never emitted. That marked every body feature unreliable and the whole
+     *     measurement was discarded as inconclusive.
+     */
+    case "freemarker-stored": {
+      if (path === "/product") {
+        const rendered = renderFreemarker(stored);
+        send(
+          200,
+          `<html><body><h3>More Than Just Birdsong</h3><label>Description:</label>\n${rendered}\n` +
+            `<a href=/product/template>Edit template</a></body></html>`,
+        );
+        return;
+      }
+      const tpl = new URLSearchParams(body).get("template");
+      if (tpl !== null) stored = tpl;
+      const write = (): void => {
+        res.writeHead(302, {
+          Location: "/product?productId=1",
+          "Content-Type": "text/html; charset=utf-8",
+          Connection: "close",
+        });
+        // Identical every time: measuring this response can never find anything.
+        res.end("");
+      };
+      if (LATENCY_MS > 0) setTimeout(write, LATENCY_MS);
+      else write();
+      return;
+    }
+
     case "erb-stored": {
       if (path === "/profile") {
         const marked = /bs[0-9a-z]{4}/.exec(stored);

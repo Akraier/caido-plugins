@@ -281,6 +281,26 @@ export function composeObservers(first: Observer, second: Observer): Observer {
   };
 }
 
+/**
+ * Whether following this request's redirect requires probe pairs to run one at a time.
+ *
+ * Lives here so the Caido backend and the CLI cannot answer it differently. They already drifted once
+ * over payload encoding, and a host that got this wrong would silently produce contaminated
+ * measurements rather than an obvious error.
+ *
+ * A redirect target is only "this request's own continuation" when the request did not change anything
+ * first. Save-then-redirect-to-view is the dominant shape for stored template injection: POST the
+ * template, 302, render it on GET. That rendered page is shared state, so concurrent pairs interleave
+ * as save(break), save(escape), view, view -- and both arms measure whichever template was written
+ * last. Differences then vary per replicate, the ladder's consistency filter discards them, and a
+ * plainly vulnerable endpoint reports nothing.
+ */
+export function redirectObservationNeedsSerialisation(template: RequestTemplate): boolean {
+  const method = sliceText(template.raw, template.methodRange).toUpperCase();
+  // Idempotent by specification, so nothing another pair does can change what the target renders.
+  return method !== "GET" && method !== "HEAD";
+}
+
 export interface ObserverPlan {
   readonly observer: Observer;
   /**

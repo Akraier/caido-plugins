@@ -58,6 +58,7 @@ export {
   composeObservers,
   createRedirectObserver,
   createUrlObserver,
+  redirectObservationNeedsSerialisation,
 } from "./transport/observe.ts";
 
 export type { Located, Origin, ResolveResult } from "./transport/url.ts";

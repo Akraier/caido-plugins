@@ -24,6 +24,7 @@ import {
   sameOrigin,
   type SendRecord,
   locate,
+  redirectObservationNeedsSerialisation,
   runSuite,
   type ProbeTransport,
   type SuiteFinding,
@@ -221,6 +222,19 @@ function buildObserverPlan(
     const maxHops = Math.max(1, Math.min(10, input.maxRedirectHops ?? 3));
     observers.push(createRedirectObserver({ template, send, maxHops }));
     parts.push(`redirect target (<=${maxHops} same-origin hops)`);
+
+    // A redirect target is NOT simply "this request's own continuation" when the request mutates
+    // something first. Save-then-redirect-to-view is the dominant shape for stored template injection:
+    // POST the template, 302, render it on GET. The rendered page is shared state, so concurrent pairs
+    // interleave as save(break), save(escape), view, view -- and both arms measure whichever template
+    // was written last. The differences then vary per replicate, the ladder's consistency filter
+    // discards them, and a plainly vulnerable endpoint reports nothing.
+    //
+    // Idempotent methods are exempt: a GET that redirects is a genuine continuation.
+    if (redirectObservationNeedsSerialisation(template)) {
+      serialisesProbes = true;
+      parts.push("one pair at a time (the request mutates before the redirect is read)");
+    }
   }
 
   if (input.observationUrl !== undefined && input.observationUrl.trim() !== "") {

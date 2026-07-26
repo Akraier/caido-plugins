@@ -259,13 +259,38 @@ export function differingFeatures(
   categorical("contentType", "status", breakVector.contentType, escapeVector.contentType);
   categorical("locationHash", "status", breakVector.locationHash, escapeVector.locationHash);
 
-  // echoState and echoTransformBits are deliberately NOT compared across arms.
+  // echoTransformBits, and echoState in general, are deliberately NOT compared across arms.
   //
   // They describe what the server did to the payload, and the two arms send DIFFERENT payloads, so
   // a difference between them is guaranteed and meaningless: `\` and `\\` classify differently by
   // construction. Comparing them produced a witness on a target that merely echoed its input,
   // found by running the pipeline end to end. They remain on the vector because per-arm they are
   // valuable, feeding the separate "input transformed or stripped" report rather than a witness.
+  //
+  // ONE axis of echoState is exempt: whether the echo lost its closing canary.
+  //
+  // `unpaired` means the opening canary was found and the closing one was not, i.e. the server began
+  // emitting the value and stopped partway. When that happens in one arm and not the other it is the
+  // signature of an interpreter dying mid-render, which is the strongest evidence this technique can
+  // produce -- and it was being thrown away. A template engine that aborts on `${7/0}` emits the text
+  // before the payload and nothing after it, so the closing canary vanishes and every body feature is
+  // declared unreliable; a blatant server-side template injection then reported "inconclusive".
+  //
+  // It is safe to compare where raw echoState is not, because payload lengths are equalised by the
+  // parity step. Truncation at a byte limit therefore hits both arms identically, so an asymmetric
+  // loss cannot be explained by one payload being longer. The canaries themselves are plain
+  // alphanumerics, so no escaping or filtering rule treats them differently between arms. And the
+  // control arms still adjudicate it: an application that merely reacts to punctuation loses the
+  // canary on Ds and Bd too, which vetoes the witness.
+  categorical(
+    "echoTruncated",
+    // Classed with status rather than the body features: this is an observation about whether the
+    // response finished, not a measurement taken from its content, so it stays admissible in exactly
+    // the case where body features do not.
+    "status",
+    breakVector.echoState === "unpaired" ? "truncated" : "intact",
+    escapeVector.echoState === "unpaired" ? "truncated" : "intact",
+  );
 
   numeric("bodyLength", "size", breakVector.bodyLength, escapeVector.bodyLength, {
     lengthSensitive: true,

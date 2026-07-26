@@ -163,17 +163,31 @@ function makeArmBuilder(
 ): (payload: string, canary: Canary) => EngineRequest {
   const { template, target } = options;
   return (payload, canary) => {
-    const framed =
+    // Only the canary-framed payload is encoded. `baseValue` came from `sliceText` over the recorded
+    // request, so it is ALREADY in wire form, and running it through the codec again double-encoded it:
+    // a form field holding `%3Cp%3E...` was re-sent as `%253Cp%253E...`, and the application stored the
+    // literal text `%3Cp%3E`. On an SSTI template field that is doubly destructive -- it rewrites the
+    // very `${...}` expressions that make the field a template, so the payload lands in a context that
+    // no longer resembles the one the operator was testing, and on a save endpoint the corruption
+    // persists. Found on a live target whose product template it had silently mangled.
+    const framedPayload =
       canary.right === undefined
-        ? `${slot.baseValue}${canary.left}${payload}`
-        : `${slot.baseValue}${canary.left}${payload}${canary.right}`;
+        ? `${canary.left}${payload}`
+        : `${canary.left}${payload}${canary.right}`;
 
-    const encoded = slot.codec.encode(asciiBytes(framed), wireForm);
+    const encoded = slot.codec.encode(asciiBytes(framedPayload), wireForm);
     if (!encoded.ok) {
       throw new PayloadNotDeliverable(`${slot.name}: ${encoded.detail}`);
     }
 
-    let raw = assemble(template, [{ range: slot.range, bytes: encoded.bytes }]);
+    // Prefix the existing value byte-for-byte, so the payload is appended to the real value in its
+    // real encoding rather than to a re-encoded copy of it.
+    const baseBytes = asciiBytes(slot.baseValue);
+    const valueBytes = new Uint8Array(baseBytes.length + encoded.bytes.length);
+    valueBytes.set(baseBytes);
+    valueBytes.set(encoded.bytes, baseBytes.length);
+
+    let raw = assemble(template, [{ range: slot.range, bytes: valueBytes }]);
 
     // Fixed-length buster, appended to the request target so a cached response cannot make a
     // difference look permanent.

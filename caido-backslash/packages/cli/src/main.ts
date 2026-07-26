@@ -28,6 +28,7 @@ import {
   locate,
   type ObserveSend,
   parseObservationUrl,
+  redirectObservationNeedsSerialisation,
   runSuite,
   sameOrigin,
   type SendRecord,
@@ -220,6 +221,10 @@ async function main(): Promise<void> {
       createRedirectObserver({ template, send, maxHops: Math.max(1, Math.min(10, args.maxHops)) }),
     );
     console.log(`measuring   redirect target (<=${args.maxHops} same-origin hops)`);
+    if (redirectObservationNeedsSerialisation(template)) {
+      serialiseProbes = true;
+      console.log(`            pairs run one at a time (this request mutates before the redirect)`);
+    }
   }
   if (args.observeUrl !== undefined) {
     const parsed = parseObservationUrl(args.observeUrl, origin);
